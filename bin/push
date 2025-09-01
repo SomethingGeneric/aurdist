@@ -1,0 +1,11 @@
+#!/bin/bash
+set -euo pipefail
+
+# Source the configuration file
+source config/aurdist.conf
+
+echo "Pushing repository to remote server..."
+
+rsync -avz --delete repo/ "$REMOTE_SERVER:$REMOTE_DIR"
+
+echo "Push complete."
