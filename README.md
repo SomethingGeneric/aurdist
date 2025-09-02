@@ -14,7 +14,7 @@ Pacman dependencies: `sudo pacman -Sy --noconfirm base-devel pacman-contrib git 
 3. Run either `./build.sh <package_name>` or put a list of your favorite AUR packages into `targets.txt` and run `./build.sh` with no args
 4. Put either your web server URL or your path to `packages/` into your `/etc/pacman.conf` (if it's a web server, then you can have a dedicated package building box!)
 
-## Config Examples
+## Pacman Config Examples
 Local folder:
 ```
 [aurdist]
