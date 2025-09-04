@@ -5,7 +5,7 @@ AUR Utility - A comprehensive tool for building and managing AUR packages.
 This script can:
 1. Build specific packages when given as arguments
 2. Check all packages in packages/ directory and rebuild outdated ones when run with no arguments
-3. Handle AUR dependencies automatically
+3. Handle AUR dependencies automatically by pulling them natively with Pacman
 4. Manage the pacman repository database
 5. Sync packages to remote locations
 
@@ -14,6 +14,7 @@ Usage:
     python aurutil.py package-name       # Build specific package
     python aurutil.py -f package-name    # Force build specific package
     python aurutil.py --check-only       # Only check versions, don't build
+    python aurutil.py --debug package    # Build with detailed output (for debugging)
 """
 
 import subprocess
@@ -25,6 +26,8 @@ import requests
 import shutil
 import argparse
 import glob
+import tempfile
+import atexit
 from pathlib import Path
 from datetime import datetime
 
@@ -32,19 +35,131 @@ from datetime import datetime
 # Documentation: https://wiki.archlinux.org/title/AUR_web_interface#RPC_interface
 AUR_RPC_URL = "https://aur.archlinux.org/rpc/?v=5&type=info&arg[]="
 
-def run_command(command, check=True, capture_output=True, cwd=None):
+# Global tracking for cleanup
+cloned_directories = set()
+build_failures = []
+
+def cleanup_cloned_directories():
+    """Clean up all cloned AUR directories."""
+    for directory in cloned_directories.copy():
+        if os.path.exists(directory):
+            try:
+                print(f"Cleaning up directory: {directory}")
+                shutil.rmtree(directory)
+                cloned_directories.discard(directory)
+            except Exception as e:
+                print(f"Warning: Failed to clean up {directory}: {e}")
+
+def register_cleanup():
+    """Register cleanup function to run on exit."""
+    atexit.register(cleanup_cloned_directories)
+
+def report_build_failures():
+    """Report any build failures that occurred."""
+    if build_failures:
+        print(f"\n{'='*60}")
+        print(f"BUILD FAILURES REPORT ({len(build_failures)} failures)")
+        print(f"{'='*60}")
+        
+        for i, failure in enumerate(build_failures, 1):
+            print(f"\n{i}. Package: {failure['package']}")
+            print(f"   Command: {failure['command']}")
+            print(f"   Time: {failure['timestamp']}")
+            print(f"   Error: {failure['error']}")
+        
+        print(f"\n{'='*60}")
+        return True
+    return False
+
+def safe_clone_aur_package(package_name, debug=False):
+    """Safely clone an AUR package, removing existing directory if it exists."""
+    # Remove existing directory if it exists
+    if os.path.exists(package_name):
+        print(f"Removing existing directory: {package_name}")
+        try:
+            shutil.rmtree(package_name)
+        except Exception as e:
+            print(f"Warning: Failed to remove existing directory {package_name}: {e}")
+    
+    # Clone the repository
+    clone_cmd = f"git clone https://aur.archlinux.org/{package_name}.git"
+    run_command(clone_cmd, package_name=package_name, debug=debug)
+    
+    # Register for cleanup
+    cloned_directories.add(package_name)
+    
+    return package_name
+
+def run_command(command, check=True, capture_output=True, cwd=None, package_name=None, debug=False):
     """Run a shell command and return the output."""
-    if capture_output:
+    if debug and not capture_output:
+        # In debug mode, show output in real-time
+        print(f"DEBUG: Running command: {command}")
+        if cwd:
+            print(f"DEBUG: In directory: {cwd}")
+        result = subprocess.run(command, shell=True, cwd=cwd)
+        if result.returncode != 0:
+            error_msg = f"Command failed: '{command}' (exit code: {result.returncode})"
+            if cwd:
+                error_msg += f" in directory: {cwd}"
+            
+            if package_name:
+                build_failures.append({
+                    'package': package_name,
+                    'command': command,
+                    'error': error_msg,
+                    'timestamp': datetime.now().isoformat()
+                })
+                print(f"BUILD FAILURE for {package_name}: {error_msg}")
+            else:
+                print(f"Error running command '{command}'")
+            
+            if check:
+                sys.exit(result.returncode)
+        return "", ""
+    elif capture_output:
         result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=True, cwd=cwd)
-        if check and result.returncode != 0:
-            print(f"Error running command '{command}': {result.stderr}")
+        if result.returncode != 0:
+            error_msg = f"Command failed: '{command}' (exit code: {result.returncode})"
+            if cwd:
+                error_msg += f" in directory: {cwd}"
+            if result.stderr:
+                error_msg += f"\nStderr: {result.stderr}"
+            if result.stdout:
+                error_msg += f"\nStdout: {result.stdout}"
+            
+            if package_name:
+                build_failures.append({
+                    'package': package_name,
+                    'command': command,
+                    'error': error_msg,
+                    'timestamp': datetime.now().isoformat()
+                })
+                print(f"BUILD FAILURE for {package_name}: {error_msg}")
+            else:
+                print(f"Error running command '{command}': {result.stderr}")
+            
             if check:
                 sys.exit(result.returncode)
         return result.stdout.strip(), result.stderr.strip()
     else:
         result = subprocess.run(command, shell=True, cwd=cwd)
-        if check and result.returncode != 0:
-            print(f"Error running command '{command}'")
+        if result.returncode != 0:
+            error_msg = f"Command failed: '{command}' (exit code: {result.returncode})"
+            if cwd:
+                error_msg += f" in directory: {cwd}"
+            
+            if package_name:
+                build_failures.append({
+                    'package': package_name,
+                    'command': command,
+                    'error': error_msg,
+                    'timestamp': datetime.now().isoformat()
+                })
+                print(f"BUILD FAILURE for {package_name}: {error_msg}")
+            else:
+                print(f"Error running command '{command}'")
+            
             if check:
                 sys.exit(result.returncode)
         return "", ""
@@ -172,106 +287,149 @@ def analyze_dependency_status(dependencies):
     
     return analysis
 
-def install_aur_package(package_name):
-    """Install an AUR package by cloning and building it."""
+def install_aur_package(package_name, visited=None, debug=False):
+    """Install an AUR package by cloning and building it with dependency resolution."""
+    if visited is None:
+        visited = set()
+    
+    if package_name in visited:
+        print(f"Circular dependency detected for {package_name}, skipping")
+        return
+    
     print(f"Installing AUR package: {package_name}")
     
-    # Clone the AUR repository
-    clone_cmd = f"git clone https://aur.archlinux.org/{package_name}.git"
-    run_command(clone_cmd)
+    # Check if package is already installed
+    stdout, stderr = run_command(f"pacman -Q {package_name}", check=False)
+    if stdout and package_name in stdout:
+        print(f"Package {package_name} is already installed")
+        return
     
-    # Change to package directory and build
-    os.chdir(package_name)
-    run_command("makepkg -si --noconfirm")
+    # Add to visited set to prevent circular dependencies
+    visited.add(package_name)
     
-    # Go back to parent directory
-    os.chdir("..")
+    try:
+        # Clone the AUR repository safely
+        safe_clone_aur_package(package_name, debug=debug)
+        
+        # Change to package directory and recursively handle dependencies
+        os.chdir(package_name)
+        
+        # Check and install dependencies for this AUR package
+        check_and_install_dependencies(package_name, visited, debug=debug)
+        
+        # Build the package
+        print(f"Building AUR package: {package_name}")
+        run_command("makepkg -si --noconfirm", package_name=package_name, debug=debug, capture_output=False)
+        
+        # Go back to parent directory
+        os.chdir("..")
+        
+    except Exception as e:
+        print(f"Error building AUR package {package_name}: {e}")
+        # Ensure we go back to parent directory even on error
+        if os.path.basename(os.getcwd()) == package_name:
+            os.chdir("..")
+        raise
+    finally:
+        # Remove from visited set after processing
+        visited.discard(package_name)
 
-def check_and_install_dependencies(package_name):
+def check_and_install_dependencies(package_name, visited=None, debug=False):
     """Check and install all dependencies for a package."""
+    if visited is None:
+        visited = set()
+    
     print(f"Checking dependencies for package: {package_name}")
     
-    # Clone the package first to get PKGBUILD
-    clone_cmd = f"git clone https://aur.archlinux.org/{package_name}.git"
-    run_command(clone_cmd)
-    
-    os.chdir(package_name)
-    pkgbuild_path = "PKGBUILD"
-    
-    if not os.path.exists(pkgbuild_path):
-        print(f"PKGBUILD not found for {package_name}")
-        sys.exit(1)
-    
-    # Parse dependencies from PKGBUILD
-    deps = parse_pkgbuild_dependencies(pkgbuild_path)
-    
-    # Analyze dependency status
-    analysis = analyze_dependency_status(deps)
-    
-    print(f"\nDependency Analysis for {package_name}:")
-    print(f"  Total dependencies: {analysis['total_count']}")
-    print(f"  Available in official repos: {len(analysis['official_repos'])}")
-    print(f"  Available in AUR: {len(analysis['aur_packages'])}")
-    print(f"  Not found: {len(analysis['not_found'])}")
-    
-    if analysis['aur_packages']:
-        print(f"  AUR packages: {', '.join(analysis['aur_packages'])}")
-        print("  WARNING: This package depends on other AUR packages!")
-    
-    if analysis['not_found']:
-        print(f"  Missing packages: {', '.join(analysis['not_found'])}")
-        print("  WARNING: Some dependencies could not be found!")
-    
-    # Install dependencies
-    print(f"\nInstalling dependencies...")
-    
-    # Install from official repos first
-    if analysis['official_repos']:
-        print(f"Installing from official repos: {', '.join(analysis['official_repos'])}")
-        run_command(f"sudo pacman -S --noconfirm {' '.join(analysis['official_repos'])}")
-    
-    # Install AUR packages
-    for dep in analysis['aur_packages']:
-        print(f"Installing AUR package: {dep}")
-        os.chdir("..")  # Go back to parent directory
-        install_aur_package(dep)
-        os.chdir(package_name)  # Back to package directory
+    try:
+        # Clone the package first to get PKGBUILD
+        safe_clone_aur_package(package_name, debug=debug)
+        
+        os.chdir(package_name)
+        pkgbuild_path = "PKGBUILD"
+        
+        if not os.path.exists(pkgbuild_path):
+            error_msg = f"PKGBUILD not found for {package_name}"
+            print(error_msg)
+            build_failures.append({
+                'package': package_name,
+                'command': 'check PKGBUILD',
+                'error': error_msg,
+                'timestamp': datetime.now().isoformat()
+            })
+            raise FileNotFoundError(error_msg)
+        
+        # Parse dependencies from PKGBUILD
+        deps = parse_pkgbuild_dependencies(pkgbuild_path)
+        
+        # Analyze dependency status
+        analysis = analyze_dependency_status(deps)
+        
+        print(f"\nDependency Analysis for {package_name}:")
+        print(f"  Total dependencies: {analysis['total_count']}")
+        print(f"  Available in official repos: {len(analysis['official_repos'])}")
+        print(f"  Available in AUR: {len(analysis['aur_packages'])}")
+        print(f"  Not found: {len(analysis['not_found'])}")
+        
+        if analysis['aur_packages']:
+            print(f"  AUR packages: {', '.join(analysis['aur_packages'])}")
+            print("  WARNING: This package depends on other AUR packages!")
+        
+        if analysis['not_found']:
+            print(f"  Missing packages: {', '.join(analysis['not_found'])}")
+            print("  WARNING: Some dependencies could not be found!")
+        
+        # Install dependencies
+        print(f"\nInstalling dependencies...")
+        
+        # Install from official repos first
+        if analysis['official_repos']:
+            print(f"Installing from official repos: {', '.join(analysis['official_repos'])}")
+            run_command(f"sudo pacman -S --noconfirm {' '.join(analysis['official_repos'])}", package_name=package_name, debug=debug, capture_output=False)
+        
+        # Install AUR packages
+        for dep in analysis['aur_packages']:
+            print(f"Installing AUR package: {dep}")
+            os.chdir("..")  # Go back to parent directory
+            install_aur_package(dep, visited, debug=debug)
+            os.chdir(package_name)  # Back to package directory
+            
+    except Exception as e:
+        print(f"Error checking dependencies for {package_name}: {e}")
+        # Ensure we go back to parent directory even on error
+        if os.path.basename(os.getcwd()) == package_name:
+            os.chdir("..")
+        raise
 
-def build_package_in_docker(package_name):
-    """Build a package using Docker container."""
-    print(f"Building package in Docker: {package_name}")
-    
-    # Ensure packages directory exists
-    os.makedirs("packages", exist_ok=True)
-    
-    # Build the Docker image
-    print("Building Docker image...")
-    run_command("docker build -t aur-builder .")
-    
-    # Run the Docker container
-    docker_cmd = f"docker run --rm -v {os.path.abspath('packages')}:/packages aur-builder {package_name}"
-    run_command(docker_cmd)
 
-def build_package_native(package_name):
-    """Build a package natively (without Docker)."""
+def build_package_native(package_name, debug=False):
+    """Build a package natively."""
     print(f"Building package natively: {package_name}")
     
     # Ensure packages directory exists
     os.makedirs("packages", exist_ok=True)
     
-    # Check and install dependencies
-    check_and_install_dependencies(package_name)
-    
-    # Build the package
-    print("Building the package...")
-    run_command("makepkg -sf --noconfirm")
-    
-    # Copy the built package to the packages directory
-    print("Copying built packages to packages/")
-    run_command("cp *.pkg.tar.zst ../packages/")
-    
-    # Go back to parent directory
-    os.chdir("..")
+    try:
+        # Check and install dependencies
+        check_and_install_dependencies(package_name, debug=debug)
+        
+        # Build the package
+        print("Building the package...")
+        run_command("makepkg -sf --noconfirm", package_name=package_name, debug=debug, capture_output=False)
+        
+        # Copy the built package to the packages directory
+        print("Copying built packages to packages/")
+        run_command("cp *.pkg.tar.zst ../packages/", package_name=package_name, debug=debug)
+        
+        # Go back to parent directory
+        os.chdir("..")
+        
+    except Exception as e:
+        print(f"Error building package {package_name}: {e}")
+        # Ensure we go back to parent directory even on error
+        if os.path.basename(os.getcwd()) == package_name:
+            os.chdir("..")
+        raise
 
 def update_repository():
     """Update the pacman repository database."""
@@ -306,7 +464,7 @@ def sync_packages():
         
         if remote_path:
             print(f"Syncing packages to {remote_path}")
-            run_command(f"sudo rsync -avc packages/ {remote_path}")
+            run_command(f"sudo rsync -avc --delete packages/ {remote_path}")
             print("Packages synced successfully")
 
 def get_packages_from_targets():
@@ -362,73 +520,87 @@ def main():
     parser.add_argument('package', nargs='?', help='Package name to build')
     parser.add_argument('-f', '--force', action='store_true', help='Force build even if up to date')
     parser.add_argument('--check-only', action='store_true', help='Only check versions, don\'t build')
-    parser.add_argument('--native', action='store_true', help='Build natively instead of using Docker')
+    parser.add_argument('--debug', action='store_true', help='Show detailed output from makepkg and pacman commands (useful for manual debugging)')
     
     args = parser.parse_args()
+    
+    # Register cleanup function
+    register_cleanup()
     
     print(f"AUR Utility - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 50)
     
-    if args.package:
-        # Build specific package
-        package_name = args.package
-        print(f"Building package: {package_name}")
-        
-        if not args.check_only:
-            if args.native:
-                build_package_native(package_name)
+    try:
+        if args.package:
+            # Build specific package
+            package_name = args.package
+            print(f"Building package: {package_name}")
+            
+            if not args.check_only:
+                try:
+                    build_package_native(package_name, debug=args.debug)
+                    
+                    # Update repository and sync
+                    update_repository()
+                    sync_packages()
+                except Exception as e:
+                    print(f"Failed to build {package_name}: {e}")
+                    # Don't exit here, let the failure reporting handle it
             else:
-                build_package_in_docker(package_name)
-            
-            # Update repository and sync
-            update_repository()
-            sync_packages()
+                # Just check version
+                is_outdated, status = check_package_outdated(package_name)
+                print(f"Package {package_name}: {status}")
+        
         else:
-            # Just check version
-            is_outdated, status = check_package_outdated(package_name)
-            print(f"Package {package_name}: {status}")
+            # Check all packages and rebuild outdated ones
+            print("Checking all packages for updates...")
+            
+            # Get packages from targets.txt or existing packages
+            target_packages = get_packages_from_targets()
+            if not target_packages:
+                target_packages = get_existing_packages()
+            
+            if not target_packages:
+                print("No packages found in targets.txt or packages/ directory")
+                print("Usage: python aurutil.py <package-name>")
+                print("Or create a 'targets.txt' file with package names")
+                sys.exit(1)
+            
+            print(f"Found {len(target_packages)} packages to check")
+            
+            packages_to_build = []
+            
+            for package in target_packages:
+                print(f"\nChecking {package}...")
+                is_outdated, status = check_package_outdated(package)
+                print(f"  {status}")
+                
+                if is_outdated or args.force:
+                    packages_to_build.append(package)
+            
+            if packages_to_build:
+                print(f"\nBuilding {len(packages_to_build)} outdated packages...")
+                for package in packages_to_build:
+                    print(f"\n{'='*20} Building {package} {'='*20}")
+                    try:
+                        build_package_native(package, debug=args.debug)
+                    except Exception as e:
+                        print(f"Failed to build {package}: {e}")
+                        # Continue with next package instead of exiting
+                
+                # Update repository and sync
+                update_repository()
+                sync_packages()
+            else:
+                print("\nAll packages are up to date!")
     
-    else:
-        # Check all packages and rebuild outdated ones
-        print("Checking all packages for updates...")
+    finally:
+        # Clean up any remaining directories
+        cleanup_cloned_directories()
         
-        # Get packages from targets.txt or existing packages
-        target_packages = get_packages_from_targets()
-        if not target_packages:
-            target_packages = get_existing_packages()
-        
-        if not target_packages:
-            print("No packages found in targets.txt or packages/ directory")
-            print("Usage: python aurutil.py <package-name>")
-            print("Or create a 'targets.txt' file with package names")
+        # Report any build failures
+        if report_build_failures():
             sys.exit(1)
-        
-        print(f"Found {len(target_packages)} packages to check")
-        
-        packages_to_build = []
-        
-        for package in target_packages:
-            print(f"\nChecking {package}...")
-            is_outdated, status = check_package_outdated(package)
-            print(f"  {status}")
-            
-            if is_outdated or args.force:
-                packages_to_build.append(package)
-        
-        if packages_to_build:
-            print(f"\nBuilding {len(packages_to_build)} outdated packages...")
-            for package in packages_to_build:
-                print(f"\n{'='*20} Building {package} {'='*20}")
-                if args.native:
-                    build_package_native(package)
-                else:
-                    build_package_in_docker(package)
-            
-            # Update repository and sync
-            update_repository()
-            sync_packages()
-        else:
-            print("\nAll packages are up to date!")
 
 if __name__ == "__main__":
     main()

@@ -1,3 +1,4 @@
-packages/
+packages/*
+!packages/README.html
 .where
 targets.txt
