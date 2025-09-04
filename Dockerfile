@@ -1,8 +1,12 @@
 FROM archlinux:latest
 
+RUN pacman -Sy --noconfirm
+RUN pacman -S reflector rsync --noconfirm
+RUN reflector -l 5 --country US,Canada --sort rate --save /etc/pacman.d/mirrorlist
+
 # Update the system and install dependencies
-RUN pacman -Syu --noconfirm && \
-    pacman -S --noconfirm base-devel git pacman-contrib
+RUN pacman -Syu --noconfirm
+RUN pacman -S --noconfirm base-devel git pacman-contrib
 
 # Entrypoint script
 COPY entrypoint.sh /entrypoint.sh
