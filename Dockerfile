@@ -6,11 +6,11 @@ RUN reflector -l 5 --country US,Canada --sort rate --save /etc/pacman.d/mirrorli
 
 # Update the system and install dependencies
 RUN pacman -Syu --noconfirm
-RUN pacman -S --noconfirm base-devel git pacman-contrib
+RUN pacman -S --noconfirm base-devel git pacman-contrib python python-requests
 
 # Entrypoint script
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY entrypoint.py /entrypoint.py
+RUN chmod +x /entrypoint.py
 
 # Create a non-root user to build packages
 RUN useradd -m builder
@@ -23,4 +23,4 @@ RUN echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder && \
 USER builder
 WORKDIR /home/builder
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.py"]
