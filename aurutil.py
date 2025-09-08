@@ -8,6 +8,7 @@ This script can:
 3. Handle AUR dependencies automatically by pulling them natively with Pacman
 4. Manage the pacman repository database
 5. Sync packages to remote locations
+6. Track and clean up packages installed during the build process
 
 Usage:
     python aurutil.py                    # Check and rebuild outdated packages
@@ -15,6 +16,8 @@ Usage:
     python aurutil.py -f package-name    # Force build specific package
     python aurutil.py --check-only       # Only check versions, don't build
     python aurutil.py --debug package    # Build with detailed output (for debugging)
+    python aurutil.py --no-cleanup       # Don't clean up packages after building
+    python aurutil.py --cleanup-only     # Only clean up tracked packages and exit
 """
 
 import subprocess
@@ -38,6 +41,8 @@ AUR_RPC_URL = "https://aur.archlinux.org/rpc/?v=5&type=info&arg[]="
 # Global tracking for cleanup
 cloned_directories = set()
 build_failures = []
+installed_packages = set()  # Track packages installed during build process
+root_directory = None  # Track the root directory for AUR package building
 
 def cleanup_cloned_directories():
     """Clean up all cloned AUR directories."""
@@ -50,9 +55,89 @@ def cleanup_cloned_directories():
             except Exception as e:
                 print(f"Warning: Failed to clean up {directory}: {e}")
 
+def cleanup_installed_packages():
+    """Clean up packages installed during the build process."""
+    if not installed_packages:
+        return
+    
+    print(f"\nCleaning up {len(installed_packages)} packages installed during build...")
+    
+    # Convert set to list for easier handling
+    packages_to_remove = list(installed_packages)
+    
+    # Remove packages in batches to avoid command line length limits
+    batch_size = 50
+    for i in range(0, len(packages_to_remove), batch_size):
+        batch = packages_to_remove[i:i + batch_size]
+        print(f"Removing packages batch {i//batch_size + 1}: {', '.join(batch[:5])}{'...' if len(batch) > 5 else ''}")
+        
+        try:
+            # Use pacman to remove packages
+            run_command(f"sudo pacman -R --noconfirm {' '.join(batch)}", check=False)
+            print(f"Successfully removed {len(batch)} packages")
+        except Exception as e:
+            print(f"Warning: Failed to remove some packages: {e}")
+            # Try removing packages individually
+            for package in batch:
+                try:
+                    run_command(f"sudo pacman -R --noconfirm {package}", check=False)
+                    print(f"Removed {package}")
+                except Exception as e:
+                    print(f"Warning: Failed to remove {package}: {e}")
+    
+    # Clear the tracking set
+    installed_packages.clear()
+    print("Package cleanup completed")
+
+def track_package_installation(package_name):
+    """Track a package that was installed during the build process."""
+    installed_packages.add(package_name)
+
+def set_root_directory():
+    """Set the root directory for AUR package building."""
+    global root_directory
+    root_directory = os.getcwd()
+
+def get_root_directory():
+    """Get the root directory for AUR package building."""
+    global root_directory
+    if root_directory is None:
+        root_directory = os.getcwd()
+    return root_directory
+
+def ensure_root_directory():
+    """Ensure we're in the root directory for AUR package building."""
+    root_dir = get_root_directory()
+    if os.getcwd() != root_dir:
+        os.chdir(root_dir)
+
+def get_installed_packages():
+    """Get list of currently installed packages from pacman."""
+    stdout, stderr = run_command("pacman -Qq", check=False)
+    if stdout:
+        return set(stdout.split('\n'))
+    return set()
+
+def manual_cleanup():
+    """Manually clean up packages that were tracked during build process."""
+    if not installed_packages:
+        print("No packages to clean up.")
+        return
+    
+    print(f"Found {len(installed_packages)} tracked packages:")
+    for pkg in sorted(installed_packages):
+        print(f"  - {pkg}")
+    
+    response = input("\nDo you want to remove these packages? (y/N): ")
+    if response.lower() in ['y', 'yes']:
+        cleanup_installed_packages()
+    else:
+        print("Cleanup cancelled.")
+
 def register_cleanup():
     """Register cleanup function to run on exit."""
     atexit.register(cleanup_cloned_directories)
+    atexit.register(cleanup_installed_packages)
 
 def report_build_failures():
     """Report any build failures that occurred."""
@@ -217,7 +302,7 @@ def get_local_version(package_name):
     
     # Extract version from filename
     # Pattern: package-name-version-release-arch.pkg.tar.zst
-    match = re.match(rf"{re.escape(package_name)}(?:-[a-zA-Z0-9]+)?-(.+)-x86_64\.pkg\.tar\.zst", pkg_file.name)
+    match = re.match(rf"{re.escape(package_name)}(?:-[a-zA-Z0-9]+)?-(.+)-[^-]+\.pkg\.tar\.zst", pkg_file.name)
     if match:
         return match.group(1)
     
@@ -240,8 +325,9 @@ def parse_pkgbuild_dependencies(pkgbuild_path):
     
     # Extract dependencies using regex
     for dep_type in dependencies.keys():
-        pattern = rf"{dep_type}=\((.*?)\)"
-        matches = re.findall(pattern, content, re.DOTALL)
+        # Use a more specific pattern that matches the exact dependency type
+        pattern = rf"^{dep_type}=\s*\((.*?)\)"
+        matches = re.findall(pattern, content, re.MULTILINE | re.DOTALL)
         if matches:
             # Split by newlines and clean up
             deps = []
@@ -250,10 +336,28 @@ def parse_pkgbuild_dependencies(pkgbuild_path):
                 for line in lines:
                     line = line.strip()
                     if line and not line.startswith('#'):
-                        # Remove quotes and split by spaces
-                        deps.extend(re.findall(r"'([^']+)'|\"([^\"]+)\"|(\S+)", line))
-            # Flatten the list and clean up
-            dependencies[dep_type] = [dep[0] or dep[1] or dep[2] for dep in deps if any(dep)]
+                        if dep_type == 'optdepends':
+                            # For optional dependencies, extract only the package name (before the colon)
+                            # Format: "package: description" or just "package"
+                            if ':' in line:
+                                package_name = line.split(':')[0].strip()
+                                # Remove quotes if present
+                                package_name = package_name.strip('\'"')
+                                if package_name:
+                                    deps.append(package_name)
+                            else:
+                                # No description, just package name
+                                package_name = line.strip('\'"')
+                                if package_name:
+                                    deps.append(package_name)
+                        else:
+                            # For regular dependencies, split by spaces and clean up
+                            dep_list = re.findall(r"'([^']+)'|\"([^\"]+)\"|(\S+)", line)
+                            for dep in dep_list:
+                                dep_name = dep[0] or dep[1] or dep[2]
+                                if dep_name:
+                                    deps.append(dep_name)
+            dependencies[dep_type] = deps
     
     return dependencies
 
@@ -307,6 +411,9 @@ def install_aur_package(package_name, visited=None, debug=False):
     # Add to visited set to prevent circular dependencies
     visited.add(package_name)
     
+    # Ensure we're in the root directory for AUR package building
+    ensure_root_directory()
+    
     try:
         # Clone the AUR repository safely
         safe_clone_aur_package(package_name, debug=debug)
@@ -321,14 +428,16 @@ def install_aur_package(package_name, visited=None, debug=False):
         print(f"Building AUR package: {package_name}")
         run_command("makepkg -si --noconfirm", package_name=package_name, debug=debug, capture_output=False)
         
-        # Go back to parent directory
-        os.chdir("..")
+        # Track the package we just installed
+        track_package_installation(package_name)
+        
+        # Go back to root directory
+        ensure_root_directory()
         
     except Exception as e:
         print(f"Error building AUR package {package_name}: {e}")
-        # Ensure we go back to parent directory even on error
-        if os.path.basename(os.getcwd()) == package_name:
-            os.chdir("..")
+        # Ensure we go back to root directory even on error
+        ensure_root_directory()
         raise
     finally:
         # Remove from visited set after processing
@@ -386,25 +495,35 @@ def check_and_install_dependencies(package_name, visited=None, debug=False):
         if analysis['official_repos']:
             print(f"Installing from official repos: {', '.join(analysis['official_repos'])}")
             run_command(f"sudo pacman -S --noconfirm {' '.join(analysis['official_repos'])}", package_name=package_name, debug=debug, capture_output=False)
+            # Track the packages we just installed
+            for pkg in analysis['official_repos']:
+                track_package_installation(pkg)
         
         # Install AUR packages
         for dep in analysis['aur_packages']:
             print(f"Installing AUR package: {dep}")
-            os.chdir("..")  # Go back to parent directory
+            # Go back to root directory for AUR package installation
+            ensure_root_directory()
             install_aur_package(dep, visited, debug=debug)
-            os.chdir(package_name)  # Back to package directory
+            # Track the AUR package we just installed
+            track_package_installation(dep)
+            # Return to package directory
+            os.chdir(package_name)
             
     except Exception as e:
         print(f"Error checking dependencies for {package_name}: {e}")
-        # Ensure we go back to parent directory even on error
-        if os.path.basename(os.getcwd()) == package_name:
-            os.chdir("..")
+        # Ensure we go back to root directory even on error
+        ensure_root_directory()
         raise
 
 
 def build_package_native(package_name, debug=False):
     """Build a package natively."""
     print(f"Building package natively: {package_name}")
+    
+    # Set root directory if not already set
+    if root_directory is None:
+        set_root_directory()
     
     # Ensure packages directory exists
     os.makedirs("packages", exist_ok=True)
@@ -421,14 +540,13 @@ def build_package_native(package_name, debug=False):
         print("Copying built packages to packages/")
         run_command("cp *.pkg.tar.zst ../packages/", package_name=package_name, debug=debug)
         
-        # Go back to parent directory
-        os.chdir("..")
+        # Go back to root directory
+        ensure_root_directory()
         
     except Exception as e:
         print(f"Error building package {package_name}: {e}")
-        # Ensure we go back to parent directory even on error
-        if os.path.basename(os.getcwd()) == package_name:
-            os.chdir("..")
+        # Ensure we go back to root directory even on error
+        ensure_root_directory()
         raise
 
 def update_repository():
@@ -439,21 +557,26 @@ def update_repository():
         return
     
     print("Updating repository database...")
-    os.chdir("packages")
+    # Store current directory
+    original_cwd = os.getcwd()
     
-    # Find all package files
-    pkg_files = list(Path(".").glob("*.pkg.tar.zst"))
-    
-    if not pkg_files:
-        print("No package files found")
-        os.chdir("..")
-        return
-    
-    # Update the repository database
-    run_command("repo-add -n aurdist.db.tar.zst *.pkg.tar.zst")
-    
-    os.chdir("..")
-    print("Repository database updated")
+    try:
+        os.chdir("packages")
+        
+        # Find all package files
+        pkg_files = list(Path(".").glob("*.pkg.tar.zst"))
+        
+        if not pkg_files:
+            print("No package files found")
+            return
+        
+        # Update the repository database
+        run_command("repo-add -vn aurdist.db.tar.zst *.pkg.tar.zst")
+        
+        print("Repository database updated")
+    finally:
+        # Always return to original directory
+        os.chdir(original_cwd)
 
 def sync_packages():
     """Sync packages to remote location if .where file exists."""
@@ -492,7 +615,7 @@ def get_existing_packages():
     for pkg_file in packages_dir.glob("*.pkg.tar.zst"):
         # Extract package name from filename
         # Pattern: package-name-version-release-arch.pkg.tar.zst
-        match = re.match(r"([^-]+(?:-[^-]+)*)-[^-]+-[^-]+-x86_64\.pkg\.tar\.zst", pkg_file.name)
+        match = re.match(r"([^-]+(?:-[^-]+)*)-[^-]+-[^-]+-[^-]+\.pkg\.tar\.zst", pkg_file.name)
         if match:
             packages.add(match.group(1))
     
@@ -521,14 +644,25 @@ def main():
     parser.add_argument('-f', '--force', action='store_true', help='Force build even if up to date')
     parser.add_argument('--check-only', action='store_true', help='Only check versions, don\'t build')
     parser.add_argument('--debug', action='store_true', help='Show detailed output from makepkg and pacman commands (useful for manual debugging)')
+    parser.add_argument('--no-cleanup', action='store_true', help='Don\'t clean up packages installed during build process')
+    parser.add_argument('--cleanup-only', action='store_true', help='Only clean up tracked packages and exit')
     
     args = parser.parse_args()
     
-    # Register cleanup function
-    register_cleanup()
+    # Register cleanup function (unless --no-cleanup is specified)
+    if not args.no_cleanup:
+        register_cleanup()
     
     print(f"AUR Utility - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 50)
+    
+    # Set root directory for AUR package building
+    set_root_directory()
+    
+    # Handle cleanup-only mode
+    if args.cleanup_only:
+        manual_cleanup()
+        return
     
     try:
         if args.package:
@@ -597,6 +731,10 @@ def main():
     finally:
         # Clean up any remaining directories
         cleanup_cloned_directories()
+        
+        # Clean up installed packages if not disabled
+        if not args.no_cleanup:
+            cleanup_installed_packages()
         
         # Report any build failures
         if report_build_failures():

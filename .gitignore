@@ -1,4 +1,4 @@
 packages/*
 !packages/README.html
 .where
-targets.txt
+__pycache__/
