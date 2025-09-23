@@ -75,3 +75,32 @@ HTTP: (assuming localhost, otherwise use remote IP)
 SigLevel = Never
 Server = http://127.0.0.1/
 ```
+
+## GitHub Actions
+
+The repository includes a GitHub Actions workflow that automatically builds all target AUR packages using an official Arch Linux container. The workflow:
+
+- Builds all packages listed in `targets.txt`
+- Handles AUR dependencies automatically
+- Creates a complete pacman-compatible repository with `repo-add`
+- Uploads the repository as a downloadable artifact
+
+### Using the Workflow Artifact
+
+1. Go to the **Actions** tab in the GitHub repository
+2. Select a successful workflow run
+3. Download the `aurdist-packages` artifact (contains `repo.tar.zst`)
+4. Extract the repository archive on your Arch system:
+   ```bash
+   tar -xzf repo.tar.zst
+   ```
+5. Add the repository to your `/etc/pacman.conf`:
+
+```
+[aurdist]
+SigLevel = Never
+Server = file:///path/to/extracted/packages
+```
+
+6. Run `pacman -Sy` to sync the repository
+7. Install packages with `pacman -S package-name`
