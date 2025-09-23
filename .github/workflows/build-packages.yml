@@ -1,0 +1,88 @@
+name: Build AUR Packages
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  build-packages:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Update system and install dependencies
+      run: |
+        # Update the system
+        pacman -Syu --noconfirm
+        
+        # Install required dependencies
+        pacman -S --noconfirm base-devel pacman-contrib git rsync curl jq python python-requests
+        
+        # Create a build user (makepkg cannot run as root)
+        useradd -m -G wheel builduser
+        echo 'builduser ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+    
+    - name: Set up workspace permissions
+      run: |
+        # Get the current working directory and set proper ownership
+        WORKSPACE_DIR=$(pwd)
+        echo "Workspace directory: $WORKSPACE_DIR"
+        chown -R builduser:builduser "$WORKSPACE_DIR"
+        
+        # Verify targets.txt exists
+        ls -la targets.txt
+        echo "Target packages to build:"
+        cat targets.txt
+    
+    - name: Build AUR packages
+      run: |
+        # Switch to builduser and run the build process
+        WORKSPACE_DIR=$(pwd)
+        sudo -u builduser bash -c "
+          cd '$WORKSPACE_DIR'
+          echo 'Starting AUR package build process...'
+          python aurutil.py --force --debug
+        "
+    
+    - name: Verify and create repository database
+      run: |
+        WORKSPACE_DIR=$(pwd)
+        sudo -u builduser bash -c "
+          cd '$WORKSPACE_DIR'
+          
+          # Check if packages directory exists and has packages
+          if [ -d packages ]; then
+            echo 'Contents of packages directory:'
+            ls -la packages/
+            
+            # Check for package files
+            if ls packages/*.pkg.tar.zst 1> /dev/null 2>&1; then
+              echo 'Found package files, creating repository database...'
+              cd packages
+              repo-add -vn aurdist.db.tar.zst *.pkg.tar.zst
+              echo 'Repository database created successfully'
+              ls -la aurdist.db*
+            else
+              echo 'No package files found in packages directory'
+              exit 1
+            fi
+          else
+            echo 'Packages directory not found'
+            exit 1
+          fi
+        "
+    
+    - name: Upload packages as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: aurdist-packages
+        path: packages/
+        retention-days: 30
+        if-no-files-found: error
