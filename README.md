@@ -89,8 +89,11 @@ The repository includes a GitHub Actions workflow that automatically builds all 
 
 1. Go to the **Actions** tab in the GitHub repository
 2. Select a successful workflow run
-3. Download the `aurdist-packages` artifact
-4. Extract the artifact on your Arch system
+3. Download the `aurdist-packages` artifact (contains `repo.tar.zst`)
+4. Extract the repository archive on your Arch system:
+   ```bash
+   tar -xzf repo.tar.zst
+   ```
 5. Add the repository to your `/etc/pacman.conf`:
 
 ```

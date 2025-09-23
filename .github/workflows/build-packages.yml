@@ -79,10 +79,24 @@ jobs:
           fi
         "
     
+    - name: Create repository archive
+      run: |
+        # Create a compressed archive of the entire packages directory
+        # This avoids issues with special characters in filenames (like : in repo database files)
+        sudo -u builduser bash -c "
+          cd /tmp
+          tar -czf repo.tar.zst -C '$WORKSPACE_DIR' packages/
+          mv repo.tar.zst '$WORKSPACE_DIR/'
+          echo 'Repository archive created:'
+          ls -la '$WORKSPACE_DIR/repo.tar.zst'
+        "
+      env:
+        WORKSPACE_DIR: ${{ github.workspace }}
+    
     - name: Upload packages as artifact
       uses: actions/upload-artifact@v4
       with:
         name: aurdist-packages
-        path: packages/
+        path: repo.tar.zst
         retention-days: 30
         if-no-files-found: error
