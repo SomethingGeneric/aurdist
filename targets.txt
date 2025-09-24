@@ -8,3 +8,4 @@ mint-l-theme
 mint-x-icons
 slack-desktop
 cursor-bin
+bambustudio-bin
