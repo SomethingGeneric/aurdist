@@ -25,7 +25,7 @@ jobs:
   build-packages:
     runs-on: ubuntu-latest
     container:
-      image: archlinux:latest
+      image: docker.io/library/archlinux:latest
     
     steps:
     - name: Checkout repository
