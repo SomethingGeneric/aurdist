@@ -1,4 +1,5 @@
 packages/*
 !packages/README.html
+!packages/index.html
 .where
 __pycache__/

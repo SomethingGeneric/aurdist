@@ -62,18 +62,26 @@ The build system automatically handles AUR package dependencies natively:
 - **Detailed Reporting**: Shows which dependencies are found where and any missing packages
 
 ## Pacman Config Examples
-Local folder:
+
+**GitHub Pages (Recommended):**
+```
+[aurdist]
+SigLevel = Never
+Server = https://somethinggeneric.github.io/aurdist/
+```
+
+**Local folder:**
 ```
 [aurdist]
 SigLevel = Never
 Server = file:///home/you/aurdist/packages
 ```
 
-HTTP: (assuming localhost, otherwise use remote IP)
+**HTTP (self-hosted):**
 ```
 [aurdist]
 SigLevel = Never
-Server = http://127.0.0.1/
+Server = http://your-server.com/path/to/packages/
 ```
 
 ## GitHub Actions
@@ -83,9 +91,34 @@ The repository includes a GitHub Actions workflow that automatically builds all 
 - Builds all packages listed in `targets.txt`
 - Handles AUR dependencies automatically
 - Creates a complete pacman-compatible repository with `repo-add`
-- Uploads the repository as a downloadable artifact
+- Deploys the repository to GitHub Pages for easy access
+- Uploads the repository as a downloadable artifact (for backup)
 
-### Using the Workflow Artifact
+### Using the GitHub Pages Repository
+
+The easiest way to use this repository is via GitHub Pages:
+
+1. Add the repository to your `/etc/pacman.conf`:
+
+```
+[aurdist]
+SigLevel = Never
+Server = https://somethinggeneric.github.io/aurdist/
+```
+
+2. Update your package database:
+   ```bash
+   sudo pacman -Sy
+   ```
+
+3. Install packages:
+   ```bash
+   sudo pacman -S package-name
+   ```
+
+### Alternative: Using the Workflow Artifact
+
+If you prefer to host the repository locally:
 
 1. Go to the **Actions** tab in the GitHub repository
 2. Select a successful workflow run
