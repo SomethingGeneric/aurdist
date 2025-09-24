@@ -21,9 +21,11 @@ Pacman dependencies: `sudo pacman -Sy --noconfirm base-devel pacman-contrib git 
 
 ## Usage
 
+The primary usage of this tool is through GitHub Actions, which automatically builds packages and serves them via GitHub Pages. For manual usage:
+
 ### Basic Usage
 ```bash
-# Check all packages and rebuild outdated ones (perfect for cron)
+# Check all packages and rebuild outdated ones
 python aurutil.py
 
 # Build a specific package
@@ -34,13 +36,6 @@ python aurutil.py -f google-chrome
 
 # Check versions only (don't build)
 python aurutil.py --check-only
-```
-
-### Cron Setup
-Add to your crontab to check and rebuild packages daily:
-```bash
-# Check and rebuild outdated packages every day at 2 AM
-0 2 * * * cd /path/to/aurdist && python aurutil.py
 ```
 
 ### Package Management
