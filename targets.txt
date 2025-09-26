@@ -9,3 +9,4 @@ mint-x-icons
 slack-desktop
 cursor-bin
 bambustudio-bin
+chrome-remote-desktop
