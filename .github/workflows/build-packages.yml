@@ -115,27 +115,13 @@ jobs:
         retention-days: 30
         if-no-files-found: error
     
-    - name: Setup Pages
-      if: github.ref == 'refs/heads/main'
-      uses: actions/configure-pages@v5
-    
-    - name: Upload to GitHub Pages
-      if: github.ref == 'refs/heads/main'
-      uses: actions/upload-pages-artifact@v4
+    - name: Deploy with rsync
+      uses: burnett01/rsync-deployments@7.1.0
       with:
+        switches: -avzr --delete
         path: packages/
-
-  deploy:
-    needs: build-packages
-    if: github.ref == 'refs/heads/main'
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    steps:
-    - name: Deploy to GitHub Pages
-      id: deployment
-      uses: actions/deploy-pages@v4
+        remote_path: /var/www/aur/
+        remote_host: h.goober.cloud
+        remote_port: 2022
+        remote_user: root
+        remote_key: ${{ secrets.SSH_KEY }}
