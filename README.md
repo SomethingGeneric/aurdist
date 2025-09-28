@@ -21,7 +21,7 @@ Pacman dependencies: `sudo pacman -Sy --noconfirm base-devel pacman-contrib git 
 
 ## Usage
 
-The primary usage of this tool is through GitHub Actions, which automatically builds packages and serves them via GitHub Pages. For manual usage:
+The primary usage of this tool is through GitHub Actions, which automatically builds packages and serves them via my personal web server (aur.mattcompton.dev)
 
 ### Basic Usage
 ```bash
