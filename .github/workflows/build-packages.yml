@@ -55,6 +55,21 @@ jobs:
         echo "Target packages to build:"
         cat targets.txt
     
+    - name: Configure pacman for recursive AUR building
+      run: |
+        # Create packages directory if it doesn't exist
+        WORKSPACE_DIR=$(pwd)
+        mkdir -p "$WORKSPACE_DIR/packages"
+        
+        # Add aurdist repository to pacman.conf for recursive building
+        # This allows packages to depend on other packages we've already built
+        echo "" >> /etc/pacman.conf
+        echo "[aurdist]" >> /etc/pacman.conf
+        echo "SigLevel = Never" >> /etc/pacman.conf
+        echo "Server = file://$WORKSPACE_DIR/packages" >> /etc/pacman.conf
+        echo "Added aurdist repository to pacman.conf:"
+        tail -n 5 /etc/pacman.conf
+
     - name: Build AUR packages
       run: |
         # Switch to builduser and run the build process
@@ -62,7 +77,7 @@ jobs:
         sudo -u builduser bash -c "
           cd '$WORKSPACE_DIR'
           echo 'Starting AUR package build process...'
-          python aurutil.py --force --debug
+          python aurutil.py --force --debug --no-cleanup
         "
     
     - name: Verify and create repository database
