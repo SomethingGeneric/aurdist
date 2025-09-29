@@ -70,6 +70,7 @@ jobs:
         echo "Server = file://$WORKSPACE_DIR/packages" >> /etc/pacman.conf
         echo "Added aurdist repository to pacman.conf:"
         tail -n 6 /etc/pacman.conf
+        pacman -Sy
 
     - name: Configure workspace for remote syncing
       run: |
@@ -105,6 +106,7 @@ jobs:
       run: |
         # Switch to builduser and run the build process with remote destination checking
         WORKSPACE_DIR=$(pwd)
+        pacman -Sy
         sudo -u builduser bash -c "
           cd '$WORKSPACE_DIR'
           echo 'Starting AUR package build process with remote destination checking...'
