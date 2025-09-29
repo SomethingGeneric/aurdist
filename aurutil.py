@@ -708,7 +708,7 @@ def sync_packages():
             ssh_args = build_ssh_command_args(ssh_config)
             ssh_args_str = ' '.join(ssh_args) if ssh_args else '-o StrictHostKeyChecking=no'
             
-            run_command(f"sudo rsync -avc -e 'ssh {ssh_args_str}' packages/ {remote_path}")
+            run_command(f"rsync -avc -e 'ssh {ssh_args_str}' packages/ {remote_path}")
             print("Packages synced successfully")
 
 def sync_single_package(package_name):
@@ -735,7 +735,7 @@ def sync_single_package(package_name):
             ssh_args_str = ' '.join(ssh_args) if ssh_args else '-o StrictHostKeyChecking=no'
             
             # Then sync
-            run_command(f"sudo rsync -avc -e 'ssh {ssh_args_str}' packages/ {remote_path}")
+            run_command(f"rsync -avc -e 'ssh {ssh_args_str}' packages/ {remote_path}")
             print(f"Package {package_name} synced successfully")
             # Update pacman database to make the package available immediately
             run_command("sudo pacman -Sy", check=False)
