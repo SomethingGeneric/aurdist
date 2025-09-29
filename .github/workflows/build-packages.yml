@@ -110,7 +110,7 @@ jobs:
         sudo -u builduser bash -c "
           cd '$WORKSPACE_DIR'
           echo 'Starting AUR package build process with remote destination checking...'
-          python aurutil.py --remote-dest root@h.goober.cloud:/var/www/aur --force --debug --no-cleanup
+          python aurutil.py --remote-dest root@h.goober.cloud:/var/www/aur --debug --no-cleanup
         "
     
     - name: Verify and create repository database
