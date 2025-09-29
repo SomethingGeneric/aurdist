@@ -627,7 +627,7 @@ def sync_packages():
         
         if remote_path:
             print(f"Syncing packages to {remote_path}")
-            run_command(f"sudo rsync -avc --delete packages/ {remote_path}")
+            run_command(f"sudo rsync -avc packages/ {remote_path}")
             print("Packages synced successfully")
 
 def sync_single_package(package_name):
@@ -642,7 +642,7 @@ def sync_single_package(package_name):
             # Update repository database first
             update_repository()
             # Then sync
-            run_command(f"sudo rsync -avc --delete packages/ {remote_path}")
+            run_command(f"sudo rsync -avc packages/ {remote_path}")
             print(f"Package {package_name} synced successfully")
             # Update pacman database to make the package available immediately
             run_command("sudo pacman -Sy", check=False)
