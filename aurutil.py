@@ -325,7 +325,7 @@ def get_remote_version(package_name, remote_dest):
         
         # Use SSH to list package files matching the pattern on the remote host
         pattern = f"{package_name}-*.pkg.tar.zst"
-        ssh_command = f"ssh {ssh_target} 'cd {remote_path} && ls -1t {pattern} 2>/dev/null | head -1'"
+        ssh_command = f"ssh -o StrictHostKeyChecking=no {ssh_target} 'cd {remote_path} && ls -1t {pattern} 2>/dev/null | head -1'"
         
         stdout, stderr = run_command(ssh_command, check=False)
         
@@ -627,7 +627,7 @@ def sync_packages():
         
         if remote_path:
             print(f"Syncing packages to {remote_path}")
-            run_command(f"sudo rsync -avc packages/ {remote_path}")
+            run_command(f"sudo rsync -avc -e 'ssh -o StrictHostKeyChecking=no' packages/ {remote_path}")
             print("Packages synced successfully")
 
 def sync_single_package(package_name):
@@ -642,7 +642,7 @@ def sync_single_package(package_name):
             # Update repository database first
             update_repository()
             # Then sync
-            run_command(f"sudo rsync -avc packages/ {remote_path}")
+            run_command(f"sudo rsync -avc -e 'ssh -o StrictHostKeyChecking=no' packages/ {remote_path}")
             print(f"Package {package_name} synced successfully")
             # Update pacman database to make the package available immediately
             run_command("sudo pacman -Sy", check=False)
