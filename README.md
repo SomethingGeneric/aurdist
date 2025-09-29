@@ -46,6 +46,31 @@ slack-desktop
 visual-studio-code-bin
 ```
 
+### SSH Configuration
+
+Configure SSH settings for remote operations by creating a `ssh.toml` file:
+
+```toml
+[ssh]
+# Remote destination in format user@host:path
+user = "root@h.goober.cloud:/var/www/aur"
+
+# SSH port (optional, defaults to 22)
+port = 2022
+
+# Additional SSH options (optional)
+# strict_host_key_checking = "no"  # Default is "no"
+# connect_timeout = 30
+# server_alive_interval = 60
+```
+
+The SSH configuration is used for:
+- Remote package version checking with `--remote-dest` flag
+- Package syncing when using `.where` file
+- All SSH operations automatically use the configured port and options
+
+If no `ssh.toml` file exists, the tool falls back to default SSH behavior for backward compatibility.
+
 ## Dependency Resolution
 
 The build system automatically handles AUR package dependencies natively:
