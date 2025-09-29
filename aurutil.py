@@ -630,6 +630,23 @@ def sync_packages():
             run_command(f"sudo rsync -avc --delete packages/ {remote_path}")
             print("Packages synced successfully")
 
+def sync_single_package(package_name):
+    """Sync packages to remote location after building a single package for recursive dependencies."""
+    where_file = Path(".where")
+    if where_file.exists():
+        with open(where_file, 'r') as f:
+            remote_path = f.read().strip()
+        
+        if remote_path:
+            print(f"Syncing {package_name} to {remote_path} for recursive dependency support")
+            # Update repository database first
+            update_repository()
+            # Then sync
+            run_command(f"sudo rsync -avc --delete packages/ {remote_path}")
+            print(f"Package {package_name} synced successfully")
+            # Update pacman database to make the package available immediately
+            run_command("sudo pacman -Sy", check=False)
+
 def get_packages_from_targets():
     """Get list of packages from targets.txt file."""
     targets_file = Path("targets.txt")
@@ -728,9 +745,11 @@ def main():
                 try:
                     build_package_native(package_name, debug=args.debug)
                     
-                    # Update repository and sync
+                    # Update repository and sync after individual package build
                     update_repository()
                     sync_packages()
+                    # Also sync individually for recursive dependencies
+                    sync_single_package(package_name)
                 except Exception as e:
                     print(f"Failed to build {package_name}: {e}")
                     # Don't exit here, let the failure reporting handle it
@@ -772,6 +791,8 @@ def main():
                     print(f"\n{'='*20} Building {package} {'='*20}")
                     try:
                         build_package_native(package, debug=args.debug)
+                        # Sync after each package for recursive dependencies
+                        sync_single_package(package)
                     except Exception as e:
                         print(f"Failed to build {package}: {e}")
                         # Continue with next package instead of exiting
