@@ -32,6 +32,7 @@ import argparse
 import glob
 import tempfile
 import atexit
+import tomllib
 from pathlib import Path
 from datetime import datetime
 
@@ -44,6 +45,63 @@ cloned_directories = set()
 build_failures = []
 installed_packages = set()  # Track packages installed during build process
 root_directory = None  # Track the root directory for AUR package building
+
+def load_ssh_config():
+    """Load SSH configuration from ssh.toml file."""
+    ssh_config_file = Path("ssh.toml")
+    if not ssh_config_file.exists():
+        # Return default config if file doesn't exist
+        return {
+            'user': None,
+            'port': None,
+            'strict_host_key_checking': 'no',
+            'connect_timeout': None,
+            'server_alive_interval': None
+        }
+    
+    try:
+        with open(ssh_config_file, 'rb') as f:
+            config = tomllib.load(f)
+        
+        ssh_section = config.get('ssh', {})
+        return {
+            'user': ssh_section.get('user'),
+            'port': ssh_section.get('port'),
+            'strict_host_key_checking': ssh_section.get('strict_host_key_checking', 'no'),
+            'connect_timeout': ssh_section.get('connect_timeout'),
+            'server_alive_interval': ssh_section.get('server_alive_interval')
+        }
+    except Exception as e:
+        print(f"Warning: Error reading ssh.toml: {e}")
+        print("Using default SSH configuration")
+        return {
+            'user': None,
+            'port': None,
+            'strict_host_key_checking': 'no',
+            'connect_timeout': None,
+            'server_alive_interval': None
+        }
+
+def build_ssh_command_args(ssh_config):
+    """Build SSH command arguments from configuration."""
+    args = []
+    
+    # Add port if specified
+    if ssh_config.get('port'):
+        args.extend(['-p', str(ssh_config['port'])])
+    
+    # Add StrictHostKeyChecking option
+    args.extend(['-o', f"StrictHostKeyChecking={ssh_config.get('strict_host_key_checking', 'no')}"])
+    
+    # Add ConnectTimeout if specified
+    if ssh_config.get('connect_timeout'):
+        args.extend(['-o', f"ConnectTimeout={ssh_config['connect_timeout']}"])
+    
+    # Add ServerAliveInterval if specified  
+    if ssh_config.get('server_alive_interval'):
+        args.extend(['-o', f"ServerAliveInterval={ssh_config['server_alive_interval']}"])
+    
+    return args
 
 def cleanup_cloned_directories():
     """Clean up all cloned AUR directories."""
@@ -315,6 +373,13 @@ def get_remote_version(package_name, remote_dest):
         return '0'
     
     try:
+        # Load SSH configuration
+        ssh_config = load_ssh_config()
+        
+        # Use configured remote destination if available, otherwise use provided remote_dest
+        if ssh_config.get('user'):
+            remote_dest = ssh_config['user']
+        
         # Parse the remote destination format: user@host:path
         if ':' in remote_dest:
             ssh_target, remote_path = remote_dest.rsplit(':', 1)
@@ -323,9 +388,13 @@ def get_remote_version(package_name, remote_dest):
             ssh_target = remote_dest
             remote_path = '.'
         
+        # Build SSH command with configuration
+        ssh_args = build_ssh_command_args(ssh_config)
+        ssh_args_str = ' '.join(ssh_args) if ssh_args else '-o StrictHostKeyChecking=no'
+        
         # Use SSH to list package files matching the pattern on the remote host
         pattern = f"{package_name}-*.pkg.tar.zst"
-        ssh_command = f"ssh -o StrictHostKeyChecking=no {ssh_target} 'cd {remote_path} && ls -1t {pattern} 2>/dev/null | head -1'"
+        ssh_command = f"ssh {ssh_args_str} {ssh_target} 'cd {remote_path} && ls -1t {pattern} 2>/dev/null | head -1'"
         
         stdout, stderr = run_command(ssh_command, check=False)
         
@@ -626,8 +695,20 @@ def sync_packages():
             remote_path = f.read().strip()
         
         if remote_path:
+            # Load SSH configuration
+            ssh_config = load_ssh_config()
+            
+            # Use configured remote destination if available, otherwise use .where file
+            if ssh_config.get('user'):
+                remote_path = ssh_config['user']
+            
             print(f"Syncing packages to {remote_path}")
-            run_command(f"sudo rsync -avc -e 'ssh -o StrictHostKeyChecking=no' packages/ {remote_path}")
+            
+            # Build SSH command with configuration for rsync
+            ssh_args = build_ssh_command_args(ssh_config)
+            ssh_args_str = ' '.join(ssh_args) if ssh_args else '-o StrictHostKeyChecking=no'
+            
+            run_command(f"sudo rsync -avc -e 'ssh {ssh_args_str}' packages/ {remote_path}")
             print("Packages synced successfully")
 
 def sync_single_package(package_name):
@@ -638,11 +719,23 @@ def sync_single_package(package_name):
             remote_path = f.read().strip()
         
         if remote_path:
+            # Load SSH configuration
+            ssh_config = load_ssh_config()
+            
+            # Use configured remote destination if available, otherwise use .where file
+            if ssh_config.get('user'):
+                remote_path = ssh_config['user']
+            
             print(f"Syncing {package_name} to {remote_path} for recursive dependency support")
             # Update repository database first
             update_repository()
+            
+            # Build SSH command with configuration for rsync
+            ssh_args = build_ssh_command_args(ssh_config)
+            ssh_args_str = ' '.join(ssh_args) if ssh_args else '-o StrictHostKeyChecking=no'
+            
             # Then sync
-            run_command(f"sudo rsync -avc -e 'ssh -o StrictHostKeyChecking=no' packages/ {remote_path}")
+            run_command(f"sudo rsync -avc -e 'ssh {ssh_args_str}' packages/ {remote_path}")
             print(f"Package {package_name} synced successfully")
             # Update pacman database to make the package available immediately
             run_command("sudo pacman -Sy", check=False)
