@@ -18,6 +18,7 @@ Usage:
     python aurutil.py --debug package    # Build with detailed output (for debugging)
     python aurutil.py --no-cleanup       # Don't clean up packages after building
     python aurutil.py --cleanup-only     # Only clean up tracked packages and exit
+    python aurutil.py --remote-dest user@host:path  # Check versions against remote SSH destination
 """
 
 import subprocess
@@ -305,6 +306,45 @@ def get_local_version(package_name):
     match = re.match(rf"{re.escape(package_name)}(?:-[a-zA-Z0-9]+)?-(.+)-[^-]+\.pkg\.tar\.zst", pkg_file.name)
     if match:
         return match.group(1)
+    
+    return '0'
+
+def get_remote_version(package_name, remote_dest):
+    """Get the version of a package from a remote SSH destination."""
+    if not remote_dest:
+        return '0'
+    
+    try:
+        # Parse the remote destination format: user@host:path
+        if ':' in remote_dest:
+            ssh_target, remote_path = remote_dest.rsplit(':', 1)
+        else:
+            # Assume current directory if no path specified
+            ssh_target = remote_dest
+            remote_path = '.'
+        
+        # Use SSH to list package files matching the pattern on the remote host
+        pattern = f"{package_name}-*.pkg.tar.zst"
+        ssh_command = f"ssh {ssh_target} 'cd {remote_path} && ls -1t {pattern} 2>/dev/null | head -1'"
+        
+        stdout, stderr = run_command(ssh_command, check=False)
+        
+        if not stdout.strip():
+            return '0'
+        
+        # Extract the most recent package filename
+        pkg_filename = stdout.strip().split('\n')[0]
+        if not pkg_filename:
+            return '0'
+        
+        # Extract version from filename (same pattern as local version)
+        # Pattern: package-name-version-release-arch.pkg.tar.zst
+        match = re.match(rf"{re.escape(package_name)}(?:-[a-zA-Z0-9]+)?-(.+)-[^-]+\.pkg\.tar\.zst", pkg_filename)
+        if match:
+            return match.group(1)
+            
+    except Exception as e:
+        print(f"Error checking remote version for {package_name}: {e}")
     
     return '0'
 
@@ -621,13 +661,20 @@ def get_existing_packages():
     
     return list(packages)
 
-def check_package_outdated(package_name):
+def check_package_outdated(package_name, remote_dest=None):
     """Check if a package is outdated compared to AUR."""
     aur_version = get_aur_version(package_name)
-    local_version = get_local_version(package_name)
+    
+    # Use remote version checking if remote_dest is specified, otherwise use local
+    if remote_dest:
+        local_version = get_remote_version(package_name, remote_dest)
+        location_desc = f"remote ({remote_dest})"
+    else:
+        local_version = get_local_version(package_name)
+        location_desc = "locally"
     
     if local_version == '0':
-        return True, f"Package not found locally (AUR: {aur_version})"
+        return True, f"Package not found {location_desc} (AUR: {aur_version})"
     
     if aur_version == '0':
         return False, f"Package not found in AUR (Local: {local_version})"
@@ -646,6 +693,7 @@ def main():
     parser.add_argument('--debug', action='store_true', help='Show detailed output from makepkg and pacman commands (useful for manual debugging)')
     parser.add_argument('--no-cleanup', action='store_true', help='Don\'t clean up packages installed during build process')
     parser.add_argument('--cleanup-only', action='store_true', help='Only clean up tracked packages and exit')
+    parser.add_argument('--remote-dest', type=str, help='SSH destination to check for existing packages (user@host:path)')
     
     args = parser.parse_args()
     
@@ -655,6 +703,12 @@ def main():
     
     print(f"AUR Utility - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 50)
+    
+    # Show remote dest mode if enabled
+    if args.remote_dest:
+        print(f"Remote destination mode enabled: {args.remote_dest}")
+        print("Package versions will be checked against remote SSH destination")
+        print("=" * 50)
     
     # Set root directory for AUR package building
     set_root_directory()
@@ -682,7 +736,7 @@ def main():
                     # Don't exit here, let the failure reporting handle it
             else:
                 # Just check version
-                is_outdated, status = check_package_outdated(package_name)
+                is_outdated, status = check_package_outdated(package_name, args.remote_dest)
                 print(f"Package {package_name}: {status}")
         
         else:
@@ -706,7 +760,7 @@ def main():
             
             for package in target_packages:
                 print(f"\nChecking {package}...")
-                is_outdated, status = check_package_outdated(package)
+                is_outdated, status = check_package_outdated(package, args.remote_dest)
                 print(f"  {status}")
                 
                 if is_outdated or args.force:
