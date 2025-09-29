@@ -37,7 +37,7 @@ jobs:
         pacman -Syu --noconfirm
         
         # Install required dependencies
-        pacman -S --noconfirm base-devel pacman-contrib git rsync curl jq python python-requests
+        pacman -S --noconfirm base-devel pacman-contrib git rsync curl jq python python-requests openssh
         
         # Create a build user (makepkg cannot run as root)
         useradd -m -G wheel builduser
@@ -79,6 +79,27 @@ jobs:
         echo "Created .where file for remote syncing:"
         cat "$WORKSPACE_DIR/.where"
         chown builduser:builduser "$WORKSPACE_DIR/.where"
+
+    - name: Set up SSH key
+      run: |
+        # Create SSH directory for builduser
+        sudo -u builduser mkdir -p /home/builduser/.ssh
+        
+        # Set up SSH key from secrets
+        echo "$SSH_KEY" | sudo -u builduser tee /home/builduser/.ssh/id_rsa > /dev/null
+        sudo -u builduser chmod 600 /home/builduser/.ssh/id_rsa
+        
+        # Add the remote host to known_hosts to avoid host key verification
+        sudo -u builduser ssh-keyscan -p 2022 h.goober.cloud >> /home/builduser/.ssh/known_hosts 2>/dev/null || true
+        sudo -u builduser chmod 644 /home/builduser/.ssh/known_hosts
+        
+        # Configure SSH to use the correct port for this host
+        echo "Host h.goober.cloud" | sudo -u builduser tee /home/builduser/.ssh/config > /dev/null
+        echo "  Port 2022" | sudo -u builduser tee -a /home/builduser/.ssh/config > /dev/null
+        echo "  StrictHostKeyChecking no" | sudo -u builduser tee -a /home/builduser/.ssh/config > /dev/null
+        sudo -u builduser chmod 600 /home/builduser/.ssh/config
+      env:
+        SSH_KEY: ${{ secrets.SSH_KEY }}
 
     - name: Build AUR packages
       run: |
