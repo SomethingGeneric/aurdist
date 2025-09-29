@@ -66,18 +66,28 @@ jobs:
         echo "" >> /etc/pacman.conf
         echo "[aurdist]" >> /etc/pacman.conf
         echo "SigLevel = Never" >> /etc/pacman.conf
+        echo "Server = https://aur.mattcompton.dev/" >> /etc/pacman.conf
         echo "Server = file://$WORKSPACE_DIR/packages" >> /etc/pacman.conf
         echo "Added aurdist repository to pacman.conf:"
-        tail -n 5 /etc/pacman.conf
+        tail -n 6 /etc/pacman.conf
+
+    - name: Configure workspace for remote syncing
+      run: |
+        # Create .where file for rsync destination
+        WORKSPACE_DIR=$(pwd)
+        echo "root@h.goober.cloud:/var/www/aur" > "$WORKSPACE_DIR/.where"
+        echo "Created .where file for remote syncing:"
+        cat "$WORKSPACE_DIR/.where"
+        chown builduser:builduser "$WORKSPACE_DIR/.where"
 
     - name: Build AUR packages
       run: |
-        # Switch to builduser and run the build process
+        # Switch to builduser and run the build process with remote destination checking
         WORKSPACE_DIR=$(pwd)
         sudo -u builduser bash -c "
           cd '$WORKSPACE_DIR'
-          echo 'Starting AUR package build process...'
-          python aurutil.py --force --debug --no-cleanup
+          echo 'Starting AUR package build process with remote destination checking...'
+          python aurutil.py --remote-dest root@h.goober.cloud:/var/www/aur --force --debug --no-cleanup
         "
     
     - name: Verify and create repository database
