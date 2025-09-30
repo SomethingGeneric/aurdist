@@ -123,34 +123,37 @@ jobs:
         "
     
     - name: Verify and create repository database
+      id: verify_packages
       run: |
         WORKSPACE_DIR=$(pwd)
-        sudo -u builduser bash -c "
-          cd '$WORKSPACE_DIR'
+        
+        # Check if packages directory exists and has packages
+        if [ -d packages ]; then
+          echo 'Contents of packages directory:'
+          ls -la packages/
           
-          # Check if packages directory exists and has packages
-          if [ -d packages ]; then
-            echo 'Contents of packages directory:'
-            ls -la packages/
-            
-            # Check for package files
-            if ls packages/*.pkg.tar.zst 1> /dev/null 2>&1; then
-              echo 'Found package files, creating repository database...'
-              cd packages
+          # Check for package files
+          if ls packages/*.pkg.tar.zst 1> /dev/null 2>&1; then
+            echo 'Found package files, creating repository database...'
+            sudo -u builduser bash -c "
+              cd '$WORKSPACE_DIR/packages'
               repo-add -vn aurdist.db.tar.zst *.pkg.tar.zst
-              echo 'Repository database created successfully'
-              ls -la aurdist.db*
-            else
-              echo 'No package files found in packages directory'
-              exit 1
-            fi
+            "
+            echo 'Repository database created successfully'
+            ls -la packages/aurdist.db*
+            echo "packages_built=true" >> $GITHUB_OUTPUT
           else
-            echo 'Packages directory not found'
-            exit 1
+            echo 'No package files found in packages directory'
+            echo 'This means all tracked packages are up to date - exiting cleanly'
+            echo "packages_built=false" >> $GITHUB_OUTPUT
           fi
-        "
+        else
+          echo 'Packages directory not found - this is an error'
+          exit 1
+        fi
     
     - name: Create repository archive
+      if: steps.verify_packages.outputs.packages_built == 'true'
       run: |
         # Create a compressed archive of the entire packages directory
         # This avoids issues with special characters in filenames (like : in repo database files)
@@ -165,6 +168,7 @@ jobs:
         WORKSPACE_DIR: ${{ github.workspace }}
     
     - name: Upload packages as artifact
+      if: steps.verify_packages.outputs.packages_built == 'true'
       uses: actions/upload-artifact@v4
       with:
         name: aurdist-packages
@@ -173,6 +177,7 @@ jobs:
         if-no-files-found: error
     
     - name: Deploy with rsync
+      if: steps.verify_packages.outputs.packages_built == 'true'
       uses: burnett01/rsync-deployments@7.1.0
       with:
         switches: -avzr --delete
