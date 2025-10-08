@@ -111,16 +111,46 @@ jobs:
         SSH_KEY: ${{ secrets.SSH_KEY }}
 
     - name: Build AUR packages
+      id: build_packages
       run: |
         # Switch to builduser and run the build process with SSH config from ssh.toml
         # Still use --remote-dest to enable remote version checking, but SSH config will be applied
         WORKSPACE_DIR=$(pwd)
         pacman -Sy
+        
+        # Capture output and exit code
+        set +e  # Don't exit on error, we want to capture the output
         sudo -u builduser bash -c "
           cd '$WORKSPACE_DIR'
           echo 'Starting AUR package build process using ssh.toml configuration...'
           python aurutil.py --remote-dest root@h.goober.cloud:/var/www/aur --debug --no-cleanup
-        "
+        " 2>&1 | tee build_output.log
+        EXIT_CODE=${PIPESTATUS[0]}
+        set -e
+        
+        # Check if there were AUR connectivity errors
+        if grep -q "AUR CONNECTIVITY ERRORS" build_output.log; then
+          echo "build_status=aur_connectivity_error" >> $GITHUB_OUTPUT
+          echo "⚠️ AUR connectivity issues detected - check logs above for details"
+        elif [ $EXIT_CODE -ne 0 ]; then
+          echo "build_status=build_failure" >> $GITHUB_OUTPUT
+          echo "❌ Build failed - check logs above for details"
+        else
+          echo "build_status=success" >> $GITHUB_OUTPUT
+          echo "✅ Build completed successfully"
+        fi
+        
+        # Exit with the original exit code
+        exit $EXIT_CODE
+    
+    - name: Report AUR connectivity issues
+      if: steps.build_packages.outputs.build_status == 'aur_connectivity_error'
+      run: |
+        echo "::error::AUR connectivity issues detected. The AUR RPC API could not be reached after multiple retry attempts."
+        echo "::error::This may indicate network connectivity issues or AUR service outages."
+        echo ""
+        echo "Failed to connect to AUR RPC API. Details:"
+        grep -A 20 "AUR CONNECTIVITY ERRORS" build_output.log || echo "See build logs for details"
     
     - name: Verify and create repository database
       id: verify_packages
