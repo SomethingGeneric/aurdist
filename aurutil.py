@@ -33,6 +33,7 @@ import glob
 import tempfile
 import atexit
 import tomllib
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -45,6 +46,54 @@ cloned_directories = set()
 build_failures = []
 installed_packages = set()  # Track packages installed during build process
 root_directory = None  # Track the root directory for AUR package building
+aur_connectivity_errors = []  # Track AUR connectivity failures
+
+def aur_rpc_request_with_retry(url, max_retries=5, initial_backoff=1):
+    """Make an AUR RPC request with exponential backoff retry logic.
+    
+    Args:
+        url: The URL to request
+        max_retries: Maximum number of retry attempts (default: 5)
+        initial_backoff: Initial backoff time in seconds (default: 1)
+    
+    Returns:
+        Response object if successful, None otherwise
+    """
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                return response
+            else:
+                error_msg = f"AUR RPC returned status code {response.status_code}"
+                if attempt < max_retries - 1:
+                    backoff = initial_backoff * (2 ** attempt)
+                    print(f"  Attempt {attempt + 1}/{max_retries} failed: {error_msg}")
+                    print(f"  Retrying in {backoff} seconds...")
+                    time.sleep(backoff)
+                else:
+                    print(f"  All {max_retries} attempts failed: {error_msg}")
+                    aur_connectivity_errors.append({
+                        'url': url,
+                        'error': error_msg,
+                        'timestamp': datetime.now().isoformat()
+                    })
+        except requests.RequestException as e:
+            error_msg = str(e)
+            if attempt < max_retries - 1:
+                backoff = initial_backoff * (2 ** attempt)
+                print(f"  Attempt {attempt + 1}/{max_retries} failed: {error_msg}")
+                print(f"  Retrying in {backoff} seconds...")
+                time.sleep(backoff)
+            else:
+                print(f"  All {max_retries} attempts failed: {error_msg}")
+                aur_connectivity_errors.append({
+                    'url': url,
+                    'error': error_msg,
+                    'timestamp': datetime.now().isoformat()
+                })
+    
+    return None
 
 def load_ssh_config():
     """Load SSH configuration from ssh.toml file."""
@@ -198,6 +247,24 @@ def register_cleanup():
     atexit.register(cleanup_cloned_directories)
     atexit.register(cleanup_installed_packages)
 
+def report_aur_connectivity_errors():
+    """Report any AUR connectivity errors that occurred."""
+    if aur_connectivity_errors:
+        print(f"\n{'='*60}")
+        print(f"AUR CONNECTIVITY ERRORS ({len(aur_connectivity_errors)} errors)")
+        print(f"{'='*60}")
+        print("\nThe AUR RPC API could not be reached after multiple retry attempts.")
+        print("This may indicate network connectivity issues or AUR service outages.")
+        
+        for i, error in enumerate(aur_connectivity_errors, 1):
+            print(f"\n{i}. URL: {error['url']}")
+            print(f"   Time: {error['timestamp']}")
+            print(f"   Error: {error['error']}")
+        
+        print(f"\n{'='*60}")
+        return True
+    return False
+
 def report_build_failures():
     """Report any build failures that occurred."""
     if build_failures:
@@ -315,25 +382,25 @@ def is_package_in_official_repos(package_name):
 
 def is_package_in_aur(package_name):
     """Check if a package exists in the AUR using the RPC interface."""
-    try:
-        response = requests.get(f"{AUR_RPC_URL}{package_name}", timeout=10)
-        if response.status_code == 200:
+    response = aur_rpc_request_with_retry(f"{AUR_RPC_URL}{package_name}")
+    if response:
+        try:
             data = response.json()
             return data.get("resultcount", 0) > 0
-    except requests.RequestException as e:
-        print(f"Error checking AUR for {package_name}: {e}")
+        except json.JSONDecodeError as e:
+            print(f"Error parsing JSON response for {package_name}: {e}")
     return False
 
 def get_aur_package_info(package_name):
     """Get detailed information about an AUR package."""
-    try:
-        response = requests.get(f"{AUR_RPC_URL}{package_name}", timeout=10)
-        if response.status_code == 200:
+    response = aur_rpc_request_with_retry(f"{AUR_RPC_URL}{package_name}")
+    if response:
+        try:
             data = response.json()
             if data.get("resultcount", 0) > 0:
                 return data["results"][0]
-    except requests.RequestException as e:
-        print(f"Error getting AUR info for {package_name}: {e}")
+        except json.JSONDecodeError as e:
+            print(f"Error parsing JSON response for {package_name}: {e}")
     return None
 
 def get_aur_version(package_name):
@@ -904,8 +971,14 @@ def main():
         if not args.no_cleanup:
             cleanup_installed_packages()
         
+        # Report any AUR connectivity errors first
+        has_aur_errors = report_aur_connectivity_errors()
+        
         # Report any build failures
-        if report_build_failures():
+        has_build_failures = report_build_failures()
+        
+        # Exit with error if there were any failures
+        if has_aur_errors or has_build_failures:
             sys.exit(1)
 
 if __name__ == "__main__":
