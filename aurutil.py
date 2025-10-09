@@ -3,22 +3,24 @@
 AUR Utility - A comprehensive tool for building and managing AUR packages.
 
 This script can:
-1. Build specific packages when given as arguments
+1. Build specific packages when given as arguments (AUR packages or generic git URLs)
 2. Check all packages in packages/ directory and rebuild outdated ones when run with no arguments
 3. Handle AUR dependencies automatically by pulling them natively with Pacman
 4. Manage the pacman repository database
 5. Sync packages to remote locations
 6. Track and clean up packages installed during the build process
+7. Support generic git URLs (HTTP/HTTPS/SSH) for custom PKGBUILD repositories
 
 Usage:
-    python aurutil.py                    # Check and rebuild outdated packages
-    python aurutil.py package-name       # Build specific package
-    python aurutil.py -f package-name    # Force build specific package
-    python aurutil.py --check-only       # Only check versions, don't build
-    python aurutil.py --debug package    # Build with detailed output (for debugging)
-    python aurutil.py --no-cleanup       # Don't clean up packages after building
-    python aurutil.py --cleanup-only     # Only clean up tracked packages and exit
-    python aurutil.py --remote-dest user@host:path  # Check versions against remote SSH destination
+    python aurutil.py                                          # Check and rebuild outdated packages
+    python aurutil.py package-name                             # Build specific AUR package
+    python aurutil.py https://github.com/user/repo.git         # Build from generic git URL
+    python aurutil.py -f package-name                          # Force build specific package
+    python aurutil.py --check-only                             # Only check versions, don't build
+    python aurutil.py --debug package                          # Build with detailed output (for debugging)
+    python aurutil.py --no-cleanup                             # Don't clean up packages after building
+    python aurutil.py --cleanup-only                           # Only clean up tracked packages and exit
+    python aurutil.py --remote-dest user@host:path             # Check versions against remote SSH destination
 """
 
 import subprocess
@@ -934,7 +936,7 @@ def check_package_outdated(package_name, remote_dest=None):
 
 def main():
     parser = argparse.ArgumentParser(description='AUR Utility - Build and manage AUR packages')
-    parser.add_argument('package', nargs='?', help='Package name to build')
+    parser.add_argument('package', nargs='?', help='Package name or git URL to build (supports AUR packages, HTTP/HTTPS URLs, and SSH URLs)')
     parser.add_argument('-f', '--force', action='store_true', help='Force build even if up to date')
     parser.add_argument('--check-only', action='store_true', help='Only check versions, don\'t build')
     parser.add_argument('--debug', action='store_true', help='Show detailed output from makepkg and pacman commands (useful for manual debugging)')

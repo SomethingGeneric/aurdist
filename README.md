@@ -28,8 +28,11 @@ The primary usage of this tool is through GitHub Actions, which automatically bu
 # Check all packages and rebuild outdated ones
 python aurutil.py
 
-# Build a specific package
+# Build a specific AUR package
 python aurutil.py google-chrome
+
+# Build from a generic git URL
+python aurutil.py https://github.com/SomethingGeneric/pkgbuild.linux.git
 
 # Force build a package even if up to date
 python aurutil.py -f google-chrome
@@ -39,12 +42,21 @@ python aurutil.py --check-only
 ```
 
 ### Package Management
-Create a `targets.txt` file with package names (one per line) to specify which packages to track:
+Create a `targets.txt` file with package names (one per line) to specify which packages to track. You can use either AUR package names or generic git URLs (HTTP/HTTPS/SSH):
 ```
+# AUR packages
 google-chrome
 slack-desktop
 visual-studio-code-bin
+
+# Generic git repositories (HTTP/HTTPS)
+https://github.com/SomethingGeneric/pkgbuild.linux.git
+
+# Generic git repositories (SSH)
+git@github.com:user/custom-package.git
 ```
+
+When using git URLs, the package name is automatically extracted from the repository name. For example, `https://github.com/user/pkgbuild.linux.git` will be built as package `pkgbuild.linux`.
 
 ### SSH Configuration
 
