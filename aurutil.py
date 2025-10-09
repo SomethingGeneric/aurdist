@@ -282,8 +282,45 @@ def report_build_failures():
         return True
     return False
 
-def safe_clone_aur_package(package_name, debug=False):
-    """Safely clone an AUR package, removing existing directory if it exists."""
+def is_git_url(target):
+    """Check if a target is a git URL (http, https, or ssh format)."""
+    # Check for HTTP/HTTPS URLs
+    if target.startswith('http://') or target.startswith('https://'):
+        return True
+    # Check for SSH URLs (git@host:path or ssh://...)
+    if target.startswith('git@') or target.startswith('ssh://'):
+        return True
+    return False
+
+def extract_package_name_from_git_url(git_url):
+    """Extract package name from a git URL.
+    
+    Examples:
+        https://github.com/user/repo.git -> repo
+        https://github.com/user/pkgbuild.linux.git -> pkgbuild.linux
+        git@github.com:user/repo.git -> repo
+    """
+    # Remove .git suffix if present
+    url = git_url
+    if url.endswith('.git'):
+        url = url[:-4]
+    
+    # Extract the last part of the path (repository name)
+    if '/' in url:
+        package_name = url.rstrip('/').split('/')[-1]
+    else:
+        package_name = url
+    
+    return package_name
+
+def safe_clone_aur_package(package_name, debug=False, git_url=None):
+    """Safely clone an AUR package or generic git repository, removing existing directory if it exists.
+    
+    Args:
+        package_name: Name of the package (used as directory name)
+        debug: Enable debug output
+        git_url: Optional git URL. If provided, clone from this URL instead of AUR
+    """
     # Remove existing directory if it exists
     if os.path.exists(package_name):
         print(f"Removing existing directory: {package_name}")
@@ -293,7 +330,14 @@ def safe_clone_aur_package(package_name, debug=False):
             print(f"Warning: Failed to remove existing directory {package_name}: {e}")
     
     # Clone the repository
-    clone_cmd = f"git clone https://aur.archlinux.org/{package_name}.git"
+    if git_url:
+        # Clone from provided git URL
+        clone_cmd = f"git clone {git_url} {package_name}"
+        print(f"Cloning from generic git URL: {git_url}")
+    else:
+        # Clone from AUR
+        clone_cmd = f"git clone https://aur.archlinux.org/{package_name}.git"
+    
     run_command(clone_cmd, package_name=package_name, debug=debug)
     
     # Register for cleanup
@@ -619,8 +663,15 @@ def install_aur_package(package_name, visited=None, debug=False):
         # Remove from visited set after processing
         visited.discard(package_name)
 
-def check_and_install_dependencies(package_name, visited=None, debug=False):
-    """Check and install all dependencies for a package."""
+def check_and_install_dependencies(package_name, visited=None, debug=False, git_url=None):
+    """Check and install all dependencies for a package.
+    
+    Args:
+        package_name: Name of the package
+        visited: Set of already visited packages (for circular dependency detection)
+        debug: Enable debug output
+        git_url: Optional git URL. If provided, clone from this URL instead of AUR
+    """
     if visited is None:
         visited = set()
     
@@ -628,7 +679,7 @@ def check_and_install_dependencies(package_name, visited=None, debug=False):
     
     try:
         # Clone the package first to get PKGBUILD
-        safe_clone_aur_package(package_name, debug=debug)
+        safe_clone_aur_package(package_name, debug=debug, git_url=git_url)
         
         os.chdir(package_name)
         pkgbuild_path = "PKGBUILD"
@@ -693,9 +744,18 @@ def check_and_install_dependencies(package_name, visited=None, debug=False):
         raise
 
 
-def build_package_native(package_name, debug=False):
-    """Build a package natively."""
-    print(f"Building package natively: {package_name}")
+def build_package_native(package_name, debug=False, git_url=None):
+    """Build a package natively.
+    
+    Args:
+        package_name: Name of the package to build
+        debug: Enable debug output
+        git_url: Optional git URL. If provided, clone from this URL instead of AUR
+    """
+    if git_url:
+        print(f"Building package natively from git URL: {package_name} ({git_url})")
+    else:
+        print(f"Building package natively: {package_name}")
     
     # Set root directory if not already set
     if root_directory is None:
@@ -706,7 +766,7 @@ def build_package_native(package_name, debug=False):
     
     try:
         # Check and install dependencies
-        check_and_install_dependencies(package_name, debug=debug)
+        check_and_install_dependencies(package_name, debug=debug, git_url=git_url)
         
         # Build the package
         print("Building the package...")
@@ -808,7 +868,11 @@ def sync_single_package(package_name):
             run_command("sudo pacman -Sy", check=False)
 
 def get_packages_from_targets():
-    """Get list of packages from targets.txt file."""
+    """Get list of packages from targets.txt file.
+    
+    Returns a list of tuples: (package_name, git_url)
+    where git_url is None for AUR packages, or the URL for generic git repositories.
+    """
     targets_file = Path("targets.txt")
     if not targets_file.exists():
         return []
@@ -818,7 +882,13 @@ def get_packages_from_targets():
         for line in f:
             line = line.strip()
             if line and not line.startswith('#'):
-                packages.append(line)
+                if is_git_url(line):
+                    # Extract package name from git URL
+                    package_name = extract_package_name_from_git_url(line)
+                    packages.append((package_name, line))
+                else:
+                    # Regular AUR package name
+                    packages.append((line, None))
     
     return packages
 
@@ -898,12 +968,21 @@ def main():
     try:
         if args.package:
             # Build specific package
-            package_name = args.package
-            print(f"Building package: {package_name}")
+            target = args.package
+            
+            # Check if the argument is a git URL
+            if is_git_url(target):
+                git_url = target
+                package_name = extract_package_name_from_git_url(target)
+                print(f"Building package from git URL: {package_name} ({git_url})")
+            else:
+                package_name = target
+                git_url = None
+                print(f"Building package: {package_name}")
             
             if not args.check_only:
                 try:
-                    build_package_native(package_name, debug=args.debug)
+                    build_package_native(package_name, debug=args.debug, git_url=git_url)
                     
                     # Update repository and sync after individual package build
                     update_repository()
@@ -925,7 +1004,10 @@ def main():
             # Get packages from targets.txt or existing packages
             target_packages = get_packages_from_targets()
             if not target_packages:
-                target_packages = get_existing_packages()
+                # get_existing_packages returns simple package names
+                existing = get_existing_packages()
+                # Convert to tuple format (package_name, None)
+                target_packages = [(pkg, None) for pkg in existing]
             
             if not target_packages:
                 print("No packages found in targets.txt or packages/ directory")
@@ -937,24 +1019,24 @@ def main():
             
             packages_to_build = []
             
-            for package in target_packages:
-                print(f"\nChecking {package}...")
-                is_outdated, status = check_package_outdated(package, args.remote_dest)
+            for package_name, git_url in target_packages:
+                print(f"\nChecking {package_name}...")
+                is_outdated, status = check_package_outdated(package_name, args.remote_dest)
                 print(f"  {status}")
                 
                 if is_outdated or args.force:
-                    packages_to_build.append(package)
+                    packages_to_build.append((package_name, git_url))
             
             if packages_to_build:
                 print(f"\nBuilding {len(packages_to_build)} outdated packages...")
-                for package in packages_to_build:
-                    print(f"\n{'='*20} Building {package} {'='*20}")
+                for package_name, git_url in packages_to_build:
+                    print(f"\n{'='*20} Building {package_name} {'='*20}")
                     try:
-                        build_package_native(package, debug=args.debug)
+                        build_package_native(package_name, debug=args.debug, git_url=git_url)
                         # Sync after each package for recursive dependencies
-                        sync_single_package(package)
+                        sync_single_package(package_name)
                     except Exception as e:
-                        print(f"Failed to build {package}: {e}")
+                        print(f"Failed to build {package_name}: {e}")
                         # Continue with next package instead of exiting
                 
                 # Update repository and sync
