@@ -611,6 +611,85 @@ def parse_pkgbuild_dependencies(pkgbuild_path):
     
     return dependencies
 
+def parse_pkgbuild_version(pkgbuild_path):
+    """Parse PKGBUILD file to extract version information.
+    
+    Args:
+        pkgbuild_path: Path to the PKGBUILD file
+        
+    Returns:
+        Version string from pkgver variable, or '0' if not found
+    """
+    if not os.path.exists(pkgbuild_path):
+        return '0'
+    
+    try:
+        with open(pkgbuild_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Extract pkgver using regex
+        # Match: pkgver=value or pkgver='value' or pkgver="value"
+        match = re.search(r'^pkgver=[\'\"]?([^\'\"\n]+)[\'\"]?', content, re.MULTILINE)
+        if match:
+            version = match.group(1).strip()
+            return version
+        
+        return '0'
+    except Exception as e:
+        print(f"Error parsing PKGBUILD for version: {e}")
+        return '0'
+
+def get_git_package_version(git_url, package_name, debug=False):
+    """Get the version of a package from a git repository by cloning and parsing PKGBUILD.
+    
+    Args:
+        git_url: The git URL to clone
+        package_name: Name of the package (used as directory name)
+        debug: Enable debug output
+        
+    Returns:
+        Version string from the PKGBUILD, or '0' if not found
+    """
+    # Ensure we're in the root directory
+    ensure_root_directory()
+    
+    temp_dir = None
+    try:
+        # Create a temporary directory for cloning
+        temp_dir = f".git_version_check_{package_name}"
+        
+        # Remove existing directory if it exists
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+        
+        # Clone the repository
+        clone_cmd = f"git clone --depth 1 {git_url} {temp_dir}"
+        if debug:
+            print(f"Cloning {git_url} to check version...")
+        run_command(clone_cmd, check=False, debug=debug)
+        
+        # Parse the PKGBUILD
+        pkgbuild_path = os.path.join(temp_dir, "PKGBUILD")
+        version = parse_pkgbuild_version(pkgbuild_path)
+        
+        if debug:
+            print(f"Version from git PKGBUILD: {version}")
+        
+        return version
+        
+    except Exception as e:
+        if debug:
+            print(f"Error getting git package version: {e}")
+        return '0'
+    finally:
+        # Clean up temporary directory
+        if temp_dir and os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception as e:
+                if debug:
+                    print(f"Warning: Failed to clean up {temp_dir}: {e}")
+
 def analyze_dependency_status(dependencies):
     """Analyze dependencies and categorize them by availability."""
     analysis = {
@@ -938,16 +1017,24 @@ def get_existing_packages():
     
     return list(packages)
 
-def check_package_outdated(package_name, remote_dest=None, is_git_package=False):
-    """Check if a package is outdated compared to AUR.
+def check_package_outdated(package_name, remote_dest=None, is_git_package=False, git_url=None, debug=False):
+    """Check if a package is outdated compared to AUR or git repository.
     
     Args:
         package_name: Name of the package to check
         remote_dest: Optional SSH destination for remote version checking
         is_git_package: True if this is a git URL package (skips AUR version check)
+        git_url: Git URL for version checking (only used when is_git_package=True)
+        debug: Enable debug output
     """
-    # For git URL packages, we can't check AUR version
+    # For git URL packages, check version from git repository PKGBUILD
     if is_git_package:
+        # Get version from git repository
+        if git_url:
+            git_version = get_git_package_version(git_url, package_name, debug=debug)
+        else:
+            git_version = '0'
+        
         # Use remote version checking if remote_dest is specified, otherwise use local
         if remote_dest:
             local_version = get_remote_version(package_name, remote_dest)
@@ -957,9 +1044,16 @@ def check_package_outdated(package_name, remote_dest=None, is_git_package=False)
             location_desc = "locally"
         
         if local_version == '0':
-            return True, f"Git package not found {location_desc}"
+            return True, f"Git package not found {location_desc} (Git: {git_version})"
+        
+        if git_version == '0':
+            return False, f"Git package found {location_desc} (Version: {local_version}, Git version unknown)"
+        
+        # Compare versions
+        if git_version != local_version:
+            return True, f"Outdated (Local: {local_version}, Git: {git_version})"
         else:
-            return False, f"Git package found {location_desc} (Version: {local_version})"
+            return False, f"Up to date (Version: {local_version})"
     
     # For AUR packages, check version
     aur_version = get_aur_version(package_name)
@@ -1047,7 +1141,7 @@ def main():
             else:
                 # Just check version
                 is_git_package = git_url is not None
-                is_outdated, status = check_package_outdated(package_name, args.remote_dest, is_git_package=is_git_package)
+                is_outdated, status = check_package_outdated(package_name, args.remote_dest, is_git_package=is_git_package, git_url=git_url, debug=args.debug)
                 print(f"Package {package_name}: {status}")
         
         else:
@@ -1075,7 +1169,7 @@ def main():
             for package_name, git_url in target_packages:
                 print(f"\nChecking {package_name}...")
                 is_git_package = git_url is not None
-                is_outdated, status = check_package_outdated(package_name, args.remote_dest, is_git_package=is_git_package)
+                is_outdated, status = check_package_outdated(package_name, args.remote_dest, is_git_package=is_git_package, git_url=git_url, debug=args.debug)
                 print(f"  {status}")
                 
                 if is_outdated or args.force:

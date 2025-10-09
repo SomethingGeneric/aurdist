@@ -58,6 +58,9 @@ git@github.com:user/custom-package.git
 
 When using git URLs, the package name is automatically extracted from the repository name. For example, `https://github.com/user/pkgbuild.linux.git` will be built as package `pkgbuild.linux`.
 
+**Version Checking for Git URLs:**
+For git repository packages, the tool automatically clones the repository and parses the `pkgver` variable from the PKGBUILD file to compare with the locally built version. This ensures you're notified when updates are available in the git repository.
+
 ### SSH Configuration
 
 Configure SSH settings for remote operations by creating a `ssh.toml` file:
