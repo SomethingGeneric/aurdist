@@ -335,8 +335,10 @@ def extract_package_name_from_git_url(git_url):
         else:
             raise ValueError(f"Cannot extract package name from URL: {git_url}")
     
-    # Validate the package name doesn't contain invalid characters
-    if not package_name or '://' in package_name or '@' in package_name:
+    # Validate the package name doesn't contain protocol markers
+    # Note: Package names can contain '@' (e.g., 'lib32-@foo'), so we only check for '://' 
+    # which indicates the URL wasn't properly parsed
+    if not package_name or '://' in package_name:
         raise ValueError(f"Invalid package name extracted from URL: {git_url}")
     
     return package_name
