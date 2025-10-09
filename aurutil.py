@@ -285,7 +285,15 @@ def report_build_failures():
     return False
 
 def is_git_url(target):
-    """Check if a target is a git URL (http, https, or ssh format)."""
+    """Check if a target is a git URL.
+    
+    Supported formats:
+    - HTTP/HTTPS: http://host/path or https://host/path
+    - SSH: git@host:path or ssh://user@host/path
+    
+    Note: Does not validate if the URL is actually a git repository,
+    only checks if it matches common git URL patterns.
+    """
     # Check for HTTP/HTTPS URLs
     if target.startswith('http://') or target.startswith('https://'):
         return True
@@ -301,6 +309,16 @@ def extract_package_name_from_git_url(git_url):
         https://github.com/user/repo.git -> repo
         https://github.com/user/pkgbuild.linux.git -> pkgbuild.linux
         git@github.com:user/repo.git -> repo
+        ssh://git@github.com/user/project.git -> project
+    
+    Args:
+        git_url: A git URL string
+        
+    Returns:
+        The extracted package name (repository name without .git extension)
+        
+    Raises:
+        ValueError: If the URL format is invalid or doesn't contain a repository name
     """
     # Remove .git suffix if present
     url = git_url
@@ -311,7 +329,15 @@ def extract_package_name_from_git_url(git_url):
     if '/' in url:
         package_name = url.rstrip('/').split('/')[-1]
     else:
-        package_name = url
+        # Handle edge case: SSH URLs like git@host:repo.git without path separator
+        if ':' in url:
+            package_name = url.split(':')[-1]
+        else:
+            raise ValueError(f"Cannot extract package name from URL: {git_url}")
+    
+    # Validate the package name doesn't contain invalid characters
+    if not package_name or '://' in package_name or '@' in package_name:
+        raise ValueError(f"Invalid package name extracted from URL: {git_url}")
     
     return package_name
 
@@ -910,8 +936,30 @@ def get_existing_packages():
     
     return list(packages)
 
-def check_package_outdated(package_name, remote_dest=None):
-    """Check if a package is outdated compared to AUR."""
+def check_package_outdated(package_name, remote_dest=None, is_git_package=False):
+    """Check if a package is outdated compared to AUR.
+    
+    Args:
+        package_name: Name of the package to check
+        remote_dest: Optional SSH destination for remote version checking
+        is_git_package: True if this is a git URL package (skips AUR version check)
+    """
+    # For git URL packages, we can't check AUR version
+    if is_git_package:
+        # Use remote version checking if remote_dest is specified, otherwise use local
+        if remote_dest:
+            local_version = get_remote_version(package_name, remote_dest)
+            location_desc = f"remote ({remote_dest})"
+        else:
+            local_version = get_local_version(package_name)
+            location_desc = "locally"
+        
+        if local_version == '0':
+            return True, f"Git package not found {location_desc}"
+        else:
+            return False, f"Git package found {location_desc} (Version: {local_version})"
+    
+    # For AUR packages, check version
     aur_version = get_aur_version(package_name)
     
     # Use remote version checking if remote_dest is specified, otherwise use local
@@ -996,7 +1044,8 @@ def main():
                     # Don't exit here, let the failure reporting handle it
             else:
                 # Just check version
-                is_outdated, status = check_package_outdated(package_name, args.remote_dest)
+                is_git_package = git_url is not None
+                is_outdated, status = check_package_outdated(package_name, args.remote_dest, is_git_package=is_git_package)
                 print(f"Package {package_name}: {status}")
         
         else:
@@ -1023,7 +1072,8 @@ def main():
             
             for package_name, git_url in target_packages:
                 print(f"\nChecking {package_name}...")
-                is_outdated, status = check_package_outdated(package_name, args.remote_dest)
+                is_git_package = git_url is not None
+                is_outdated, status = check_package_outdated(package_name, args.remote_dest, is_git_package=is_git_package)
                 print(f"  {status}")
                 
                 if is_outdated or args.force:
