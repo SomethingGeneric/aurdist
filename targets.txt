@@ -10,3 +10,4 @@ slack-desktop
 cursor-bin
 bambustudio-bin
 chrome-remote-desktop
+zoom
