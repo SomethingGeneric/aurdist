@@ -39,7 +39,22 @@ python aurutil.py -f google-chrome
 
 # Check versions only (don't build)
 python aurutil.py --check-only
+
+# Enable debug/verbose output
+python aurutil.py --debug google-chrome
+# OR use environment variable
+LOG_LEVEL=debug python aurutil.py google-chrome
 ```
+
+### Logging Verbosity
+
+By default, the tool shows minimal output:
+- Successful builds: `built <package>, updated to <version>`
+- Failed builds: `failed <package>, <termbin-url>` (with build log uploaded to termbin)
+
+To see detailed output (dependencies, build commands, etc.), use either:
+- The `--debug` flag: `python aurutil.py --debug package-name`
+- The `LOG_LEVEL` environment variable: `LOG_LEVEL=debug python aurutil.py package-name`
 
 ### Package Management
 Create a `targets.txt` file with package names (one per line) to specify which packages to track. You can use either AUR package names or generic git URLs (HTTP/HTTPS/SSH):
