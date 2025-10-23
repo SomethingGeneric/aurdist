@@ -842,7 +842,7 @@ def install_aur_package(package_name, visited=None, debug=False):
         
         # Build the package
         log_debug(f"Building AUR package: {package_name}")
-        run_command("makepkg -si --noconfirm", package_name=package_name, debug=debug, capture_output=False)
+        run_command("makepkg -sir --noconfirm", package_name=package_name, debug=debug, capture_output=False)
         
         # Track the package we just installed
         track_package_installation(package_name)
@@ -970,7 +970,7 @@ def build_package_native(package_name, debug=False, git_url=None):
         
         # Build the package
         log_debug("Building the package...")
-        run_command("makepkg -sf --noconfirm", package_name=package_name, debug=debug, capture_output=False)
+        run_command("makepkg -sfr --noconfirm", package_name=package_name, debug=debug, capture_output=False)
         
         # Copy the built package to the packages directory
         log_debug("Copying built packages to packages/")
