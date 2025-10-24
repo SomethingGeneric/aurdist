@@ -12,4 +12,3 @@ bambustudio-bin
 chrome-remote-desktop
 zoom
 fluffychat
-https://github.com/SomethingGeneric/pkgbuild.linux.git
