@@ -59,6 +59,7 @@ root_directory = None  # Track the root directory for AUR package building
 aur_connectivity_errors = []  # Track AUR connectivity failures
 current_log_level = LOG_LEVEL_INFO  # Default to minimal output
 build_success_info = []  # Track successful builds for reporting
+uptodate_package_info = []  # Track packages that are already up-to-date
 
 def log_info(message):
     """Print info level message (always shown)."""
@@ -352,6 +353,14 @@ def report_build_successes():
     if build_success_info:
         for success in build_success_info:
             log_info(f"built {success['package']}, updated to {success['version']}")
+        return True
+    return False
+
+def report_uptodate_packages():
+    """Report packages that are already up-to-date."""
+    if uptodate_package_info:
+        for pkg_info in uptodate_package_info:
+            log_info(f"uptodate {pkg_info['package']}, {pkg_info['version']}")
         return True
     return False
 
@@ -1330,6 +1339,10 @@ def check_package_outdated(package_name, remote_dest=None, is_git_package=False,
         is_git_package: True if this is a git URL package (skips AUR version check)
         git_url: Git URL for version checking (only used when is_git_package=True)
         debug: Enable debug output
+        
+    Returns:
+        Tuple of (is_outdated: bool, status: str, version: str)
+        where version is the current local/remote version
     """
     # For git URL packages, check version from git repository PKGBUILD
     if is_git_package:
@@ -1348,16 +1361,16 @@ def check_package_outdated(package_name, remote_dest=None, is_git_package=False,
             location_desc = "locally"
         
         if local_version == '0':
-            return True, f"Git package not found {location_desc} (Git: {git_version})"
+            return True, f"Git package not found {location_desc} (Git: {git_version})", '0'
         
         if git_version == '0':
-            return False, f"Git package found {location_desc} (Version: {local_version}, Git version unknown)"
+            return False, f"Git package found {location_desc} (Version: {local_version}, Git version unknown)", local_version
         
         # Compare versions
         if git_version != local_version:
-            return True, f"Outdated (Local: {local_version}, Git: {git_version})"
+            return True, f"Outdated (Local: {local_version}, Git: {git_version})", local_version
         else:
-            return False, f"Up to date (Version: {local_version})"
+            return False, f"Up to date (Version: {local_version})", local_version
     
     # For AUR packages, check version
     aur_version = get_aur_version(package_name)
@@ -1371,16 +1384,16 @@ def check_package_outdated(package_name, remote_dest=None, is_git_package=False,
         location_desc = "locally"
     
     if local_version == '0':
-        return True, f"Package not found {location_desc} (AUR: {aur_version})"
+        return True, f"Package not found {location_desc} (AUR: {aur_version})", '0'
     
     if aur_version == '0':
-        return False, f"Package not found in AUR (Local: {local_version})"
+        return False, f"Package not found in AUR (Local: {local_version})", local_version
     
     # Simple version comparison (this could be improved with proper semver parsing)
     if aur_version != local_version:
-        return True, f"Outdated (Local: {local_version}, AUR: {aur_version})"
+        return True, f"Outdated (Local: {local_version}, AUR: {aur_version})", local_version
     
-    return False, f"Up to date (Version: {local_version})"
+    return False, f"Up to date (Version: {local_version})", local_version
 
 def main():
     global current_log_level
@@ -1461,7 +1474,7 @@ def main():
             else:
                 # Just check version
                 is_git_package = git_url is not None
-                is_outdated, status = check_package_outdated(package_name, args.remote_dest, is_git_package=is_git_package, git_url=git_url, debug=args.debug)
+                is_outdated, status, version = check_package_outdated(package_name, args.remote_dest, is_git_package=is_git_package, git_url=git_url, debug=args.debug)
                 log_info(f"Package {package_name}: {status}")
         
         else:
@@ -1489,11 +1502,18 @@ def main():
             for package_name, git_url in target_packages:
                 log_debug(f"\nChecking {package_name}...")
                 is_git_package = git_url is not None
-                is_outdated, status = check_package_outdated(package_name, args.remote_dest, is_git_package=is_git_package, git_url=git_url, debug=args.debug)
+                is_outdated, status, version = check_package_outdated(package_name, args.remote_dest, is_git_package=is_git_package, git_url=git_url, debug=args.debug)
                 log_debug(f"  {status}")
                 
                 if is_outdated or args.force:
                     packages_to_build.append((package_name, git_url))
+                else:
+                    # Track packages that are already up-to-date
+                    uptodate_package_info.append({
+                        'package': package_name,
+                        'version': version,
+                        'timestamp': datetime.now().isoformat()
+                    })
             
             if packages_to_build:
                 log_debug(f"\nBuilding {len(packages_to_build)} outdated packages...")
@@ -1531,6 +1551,9 @@ def main():
         
         # Report successful builds (in minimal mode)
         report_build_successes()
+        
+        # Report up-to-date packages
+        report_uptodate_packages()
         
         # Report any AUR connectivity errors first
         has_aur_errors = report_aur_connectivity_errors()
