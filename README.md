@@ -83,7 +83,7 @@ Configure SSH settings for remote operations by creating a `ssh.toml` file:
 ```toml
 [ssh]
 # Remote destination in format user@host:path
-user = "root@h.goober.cloud:/var/www/aur"
+user = "foo@h.goober.cloud:/var/www/aur"
 
 # SSH port (optional, defaults to 22)
 port = 2022
