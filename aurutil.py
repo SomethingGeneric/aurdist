@@ -1011,12 +1011,17 @@ def generate_index_html(pkg_files):
             arch = match.group(4)
             size = pkg_file.stat().st_size
             # Convert size to human readable format
-            size_kb = size / 1024
-            if size_kb < 1024:
+            if size < 1024:
+                size_str = f"{size} B"
+            elif size < 1024 * 1024:
+                size_kb = size / 1024
                 size_str = f"{size_kb:.1f} KB"
-            else:
-                size_mb = size_kb / 1024
+            elif size < 1024 * 1024 * 1024:
+                size_mb = size / (1024 * 1024)
                 size_str = f"{size_mb:.1f} MB"
+            else:
+                size_gb = size / (1024 * 1024 * 1024)
+                size_str = f"{size_gb:.1f} GB"
             
             packages.append({
                 'name': name,
