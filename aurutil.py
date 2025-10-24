@@ -1341,8 +1341,11 @@ def check_package_outdated(package_name, remote_dest=None, is_git_package=False,
         debug: Enable debug output
         
     Returns:
-        Tuple of (is_outdated: bool, status: str, version: str)
-        where version is the current local/remote version
+        Tuple of (is_outdated: bool, status: str, version: str) where:
+        - is_outdated: True if the package needs to be built/updated
+        - status: Human-readable status message
+        - version: The locally installed or remote package version (from packages/ directory 
+                   or SSH remote if --remote-dest is specified), or '0' if not found
     """
     # For git URL packages, check version from git repository PKGBUILD
     if is_git_package:
