@@ -140,7 +140,7 @@ The repository index page (`packages/index.html`) is generated from a template f
 
 To customize the appearance or content of the index page:
 
-1. Edit the `index.template.html` file with your desired HTML, CSS, and styling changes
+1. Edit the `index.template.html` file at the repository root with your desired HTML, CSS, and styling changes
 2. The template uses the `{{PACKAGE_TABLE}}` placeholder variable which will be replaced with the generated table of available packages
 3. The next time packages are built or the repository is updated, the new template will be used automatically
 
