@@ -1,4 +1,4 @@
-gemini-cli
+gemini-cli-git
 google-chrome
 mint-themes
 mint-y-icons
