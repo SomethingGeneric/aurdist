@@ -10,6 +10,7 @@
 * **Native building** - Builds packages directly on your system using Pacman
 * **Repository management** - Automatically updates pacman repository database
 * **Remote syncing** - Optional rsync to web server directories
+* **Security monitoring** - Automatically detects and removes abandoned AUR packages to prevent malicious re-uploads
 
 ## Installation
 Pacman dependencies: `sudo pacman -Sy --noconfirm base-devel pacman-contrib git rsync curl jq python python-requests`
@@ -110,6 +111,50 @@ The build system automatically handles AUR package dependencies natively:
 - **AUR Validation**: Uses the AUR RPC API to verify AUR package availability
 - **Native Installation**: Installs official repo packages with Pacman, then builds AUR dependencies natively
 - **Detailed Reporting**: Shows which dependencies are found where and any missing packages
+
+## Security: Abandoned Package Protection
+
+To protect users from potentially malicious package re-uploads, `aurdist` automatically monitors for AUR packages that have been removed or abandoned. When running without arguments (checking all packages):
+
+### Automatic Detection and Removal
+
+1. **Package Verification**: Checks each AUR package in `targets.txt` to verify it still exists in the AUR
+2. **Immediate Removal**: For any missing packages:
+   - Removes all package files from the remote repository (via SSH)
+   - Removes the package entry from `targets.txt`
+   - Creates a GitHub issue to notify users (when running in GitHub Actions)
+3. **User Notification**: The issue created includes:
+   - Package name and removal reason
+   - Timestamp of removal
+   - Recommendations for users who have the package installed
+
+### Why This Matters
+
+When an AUR package is removed, it could be because:
+- The maintainer abandoned it
+- It was removed for violating AUR policies
+- It's been superseded by another package
+
+If not handled, a malicious actor could re-upload a package with the same name containing malicious code. This security feature prevents that by immediately removing abandoned packages from your repository.
+
+### What Gets Checked
+
+- **AUR packages**: Regular package names in `targets.txt` are checked
+- **Git URLs**: Custom git repository packages are **not** checked (they're not from AUR)
+- **Comments and empty lines**: Preserved in `targets.txt`
+
+### Example Output
+
+```
+⚠️  SECURITY: Package 'abandoned-pkg' not found in AUR - removing from repository
+Removing 'abandoned-pkg' from targets.txt
+
+============================================================
+SECURITY: Removed 1 missing AUR package(s)
+============================================================
+  - abandoned-pkg
+============================================================
+```
 
 ## Pacman Config Examples
 
