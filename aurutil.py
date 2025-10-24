@@ -993,6 +993,203 @@ def build_package_native(package_name, debug=False, git_url=None):
         ensure_root_directory()
         raise
 
+def generate_index_html(pkg_files):
+    """Generate index.html with list of available packages.
+    
+    Args:
+        pkg_files: List of Path objects for package files
+    """
+    # Extract package information
+    packages = []
+    for pkg_file in pkg_files:
+        # Pattern: package-name-version-release-arch.pkg.tar.zst
+        match = re.match(r"^(.+)-([^-]+)-([^-]+)-([^-]+)\.pkg\.tar\.zst$", pkg_file.name)
+        if match:
+            name = match.group(1)
+            version = match.group(2)
+            release = match.group(3)
+            arch = match.group(4)
+            size = pkg_file.stat().st_size
+            # Convert size to human readable format
+            size_kb = size / 1024
+            if size_kb < 1024:
+                size_str = f"{size_kb:.1f} KB"
+            else:
+                size_mb = size_kb / 1024
+                size_str = f"{size_mb:.1f} MB"
+            
+            packages.append({
+                'name': name,
+                'version': version,
+                'release': release,
+                'arch': arch,
+                'filename': pkg_file.name,
+                'size': size_str
+            })
+    
+    # Sort packages by name
+    packages.sort(key=lambda x: x['name'])
+    
+    # Generate HTML
+    html = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>aurdist - AUR Package Repository</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            border-bottom: 2px solid #0066cc;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #444;
+            margin-top: 30px;
+        }
+        code {
+            background-color: #f4f4f4;
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+        }
+        pre {
+            background-color: #f8f8f8;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            border-left: 4px solid #0066cc;
+        }
+        .note {
+            background-color: #e7f3ff;
+            padding: 15px;
+            border-radius: 5px;
+            border-left: 4px solid #0066cc;
+            margin: 20px 0;
+        }
+        .package-list {
+            margin: 20px 0;
+        }
+        .package-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        .package-table th {
+            background-color: #0066cc;
+            color: white;
+            padding: 12px;
+            text-align: left;
+            font-weight: bold;
+        }
+        .package-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #ddd;
+        }
+        .package-table tr:hover {
+            background-color: #f5f5f5;
+        }
+        .package-name {
+            font-weight: bold;
+            color: #0066cc;
+        }
+        .package-count {
+            color: #666;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>aurdist - AUR Package Repository</h1>
+        
+        <p>This is a pre-built repository of AUR (Arch User Repository) packages.</p>
+        
+        <h2>Usage</h2>
+        <p>To use this repository with pacman, add the following to your <code>/etc/pacman.conf</code>:</p>
+        
+        <pre>[aurdist]
+SigLevel = Never
+Server = https://aur.mattcompton.dev/</pre>
+        
+        <p>Then update your package database:</p>
+        <pre>sudo pacman -Sy</pre>
+        
+        <p>You can now install packages from this repository:</p>
+        <pre>sudo pacman -S package-name</pre>
+        
+        <div class="note">
+            <strong>Note:</strong> This repository is automatically updated when new package versions are available. The packages are built in an official Arch Linux container environment for compatibility.
+        </div>
+        
+        <h2>Available Packages</h2>
+        <div class="package-list">
+'''
+    
+    if packages:
+        html += f'            <p class="package-count">Total packages: {len(packages)}</p>\n'
+        html += '            <table class="package-table">\n'
+        html += '                <thead>\n'
+        html += '                    <tr>\n'
+        html += '                        <th>Package Name</th>\n'
+        html += '                        <th>Version</th>\n'
+        html += '                        <th>Arch</th>\n'
+        html += '                        <th>Size</th>\n'
+        html += '                        <th>File</th>\n'
+        html += '                    </tr>\n'
+        html += '                </thead>\n'
+        html += '                <tbody>\n'
+        
+        for pkg in packages:
+            html += '                    <tr>\n'
+            html += f'                        <td class="package-name">{pkg["name"]}</td>\n'
+            html += f'                        <td>{pkg["version"]}-{pkg["release"]}</td>\n'
+            html += f'                        <td>{pkg["arch"]}</td>\n'
+            html += f'                        <td>{pkg["size"]}</td>\n'
+            html += f'                        <td><a href="{pkg["filename"]}">{pkg["filename"]}</a></td>\n'
+            html += '                    </tr>\n'
+        
+        html += '                </tbody>\n'
+        html += '            </table>\n'
+    else:
+        html += '            <p>No packages available yet.</p>\n'
+    
+    html += '''        </div>
+        
+        <h2>Repository Files</h2>
+        <p>This repository contains:</p>
+        <ul>
+            <li><code>*.pkg.tar.zst</code> - Built package files</li>
+            <li><code>aurdist.db.tar.zst</code> - Repository database</li>
+            <li><code>aurdist.files.tar.zst</code> - File list database</li>
+        </ul>
+        
+        <h2>Source Code</h2>
+        <p>See the source code and build process at: <a href="https://github.com/SomethingGeneric/aurdist">https://github.com/SomethingGeneric/aurdist</a></p>
+    </div>
+</body>
+</html>
+'''
+    
+    # Write the HTML file
+    with open('index.html', 'w', encoding='utf-8') as f:
+        f.write(html)
+    
+    log_debug(f"Generated index.html with {len(packages)} packages")
+
 def update_repository():
     """Update the pacman repository database."""
     packages_dir = Path("packages")
@@ -1016,6 +1213,9 @@ def update_repository():
         
         # Update the repository database
         run_command("repo-add -vn aurdist.db.tar.zst *.pkg.tar.zst")
+        
+        # Generate index.html with package list
+        generate_index_html(pkg_files)
         
         log_debug("Repository database updated")
     finally:
