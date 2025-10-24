@@ -1044,159 +1044,48 @@ def generate_index_html(pkg_files):
     # Sort packages by name
     packages.sort(key=lambda x: x['name'])
     
-    # Generate HTML
-    html = '''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>aurdist - AUR Package Repository</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 1000px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f5f5f5;
-        }
-        .container {
-            background-color: white;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        h1 {
-            color: #333;
-            border-bottom: 2px solid #0066cc;
-            padding-bottom: 10px;
-        }
-        h2 {
-            color: #444;
-            margin-top: 30px;
-        }
-        code {
-            background-color: #f4f4f4;
-            padding: 2px 4px;
-            border-radius: 3px;
-            font-family: 'Courier New', monospace;
-        }
-        pre {
-            background-color: #f8f8f8;
-            padding: 15px;
-            border-radius: 5px;
-            overflow-x: auto;
-            border-left: 4px solid #0066cc;
-        }
-        .note {
-            background-color: #e7f3ff;
-            padding: 15px;
-            border-radius: 5px;
-            border-left: 4px solid #0066cc;
-            margin: 20px 0;
-        }
-        .package-list {
-            margin: 20px 0;
-        }
-        .package-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 15px;
-        }
-        .package-table th {
-            background-color: #0066cc;
-            color: white;
-            padding: 12px;
-            text-align: left;
-            font-weight: bold;
-        }
-        .package-table td {
-            padding: 10px 12px;
-            border-bottom: 1px solid #ddd;
-        }
-        .package-table tr:hover {
-            background-color: #f5f5f5;
-        }
-        .package-name {
-            font-weight: bold;
-            color: #0066cc;
-        }
-        .package-count {
-            color: #666;
-            font-style: italic;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>aurdist - AUR Package Repository</h1>
-        
-        <p>This is a pre-built repository of AUR (Arch User Repository) packages.</p>
-        
-        <h2>Usage</h2>
-        <p>To use this repository with pacman, add the following to your <code>/etc/pacman.conf</code>:</p>
-        
-        <pre>[aurdist]
-SigLevel = Never
-Server = https://aur.mattcompton.dev/</pre>
-        
-        <p>Then update your package database:</p>
-        <pre>sudo pacman -Sy</pre>
-        
-        <p>You can now install packages from this repository:</p>
-        <pre>sudo pacman -S package-name</pre>
-        
-        <div class="note">
-            <strong>Note:</strong> This repository is automatically updated when new package versions are available. The packages are built in an official Arch Linux container environment for compatibility.
-        </div>
-        
-        <h2>Available Packages</h2>
-        <div class="package-list">
-'''
-    
+    # Generate the package table HTML
+    package_table_html = ''
     if packages:
-        html += f'            <p class="package-count">Total packages: {len(packages)}</p>\n'
-        html += '            <table class="package-table">\n'
-        html += '                <thead>\n'
-        html += '                    <tr>\n'
-        html += '                        <th>Package Name</th>\n'
-        html += '                        <th>Version</th>\n'
-        html += '                        <th>Arch</th>\n'
-        html += '                        <th>Size</th>\n'
-        html += '                        <th>File</th>\n'
-        html += '                    </tr>\n'
-        html += '                </thead>\n'
-        html += '                <tbody>\n'
+        package_table_html += f'            <p class="package-count">Total packages: {len(packages)}</p>\n'
+        package_table_html += '            <table class="package-table">\n'
+        package_table_html += '                <thead>\n'
+        package_table_html += '                    <tr>\n'
+        package_table_html += '                        <th>Package Name</th>\n'
+        package_table_html += '                        <th>Version</th>\n'
+        package_table_html += '                        <th>Arch</th>\n'
+        package_table_html += '                        <th>Size</th>\n'
+        package_table_html += '                        <th>File</th>\n'
+        package_table_html += '                    </tr>\n'
+        package_table_html += '                </thead>\n'
+        package_table_html += '                <tbody>\n'
         
         for pkg in packages:
-            html += '                    <tr>\n'
-            html += f'                        <td class="package-name">{pkg["name"]}</td>\n'
-            html += f'                        <td>{pkg["version"]}-{pkg["release"]}</td>\n'
-            html += f'                        <td>{pkg["arch"]}</td>\n'
-            html += f'                        <td>{pkg["size"]}</td>\n'
-            html += f'                        <td><a href="{pkg["filename"]}">{pkg["filename"]}</a></td>\n'
-            html += '                    </tr>\n'
+            package_table_html += '                    <tr>\n'
+            package_table_html += f'                        <td class="package-name">{pkg["name"]}</td>\n'
+            package_table_html += f'                        <td>{pkg["version"]}-{pkg["release"]}</td>\n'
+            package_table_html += f'                        <td>{pkg["arch"]}</td>\n'
+            package_table_html += f'                        <td>{pkg["size"]}</td>\n'
+            package_table_html += f'                        <td><a href="{pkg["filename"]}">{pkg["filename"]}</a></td>\n'
+            package_table_html += '                    </tr>\n'
         
-        html += '                </tbody>\n'
-        html += '            </table>\n'
+        package_table_html += '                </tbody>\n'
+        package_table_html += '            </table>\n'
     else:
-        html += '            <p>No packages available yet.</p>\n'
+        package_table_html += '            <p>No packages available yet.</p>\n'
     
-    html += '''        </div>
+    # Read the HTML template file
+    template_path = Path(get_root_directory()) / 'index.template.html'
+    if not template_path.exists():
+        log_debug(f"Warning: Template file not found at {template_path}, using fallback")
+        # Fallback to writing directly if template doesn't exist
+        html = package_table_html
+    else:
+        with open(template_path, 'r', encoding='utf-8') as f:
+            template = f.read()
         
-        <h2>Repository Files</h2>
-        <p>This repository contains:</p>
-        <ul>
-            <li><code>*.pkg.tar.zst</code> - Built package files</li>
-            <li><code>aurdist.db.tar.zst</code> - Repository database</li>
-            <li><code>aurdist.files.tar.zst</code> - File list database</li>
-        </ul>
-        
-        <h2>Source Code</h2>
-        <p>See the source code and build process at: <a href="https://github.com/SomethingGeneric/aurdist">https://github.com/SomethingGeneric/aurdist</a></p>
-    </div>
-</body>
-</html>
-'''
+        # Replace the placeholder with the generated package table
+        html = template.replace('{{PACKAGE_TABLE}}', package_table_html)
     
     # Write the HTML file
     with open('index.html', 'w', encoding='utf-8') as f:
