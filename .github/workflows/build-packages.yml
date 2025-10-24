@@ -199,7 +199,7 @@ jobs:
     
     - name: Upload packages as artifact
       if: steps.verify_packages.outputs.packages_built == 'true'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: aurdist-packages
         path: repo.tar.zst
