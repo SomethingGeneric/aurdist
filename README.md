@@ -83,7 +83,7 @@ Configure SSH settings for remote operations by creating a `ssh.toml` file:
 ```toml
 [ssh]
 # Remote destination in format user@host:path
-user = "root@h.goober.cloud:/var/www/aur"
+user = "foo@h.goober.cloud:/var/www/aur"
 
 # SSH port (optional, defaults to 22)
 port = 2022
@@ -133,3 +133,15 @@ Server = file:///home/you/aurdist/packages
 SigLevel = Never
 Server = http://your-server.com/path/to/packages/
 ```
+
+## Customizing the Repository Index Page
+
+The repository index page (`packages/index.html`) is generated from a template file located at the repository root: `index.template.html`.
+
+To customize the appearance or content of the index page:
+
+1. Edit the `index.template.html` file at the repository root with your desired HTML, CSS, and styling changes
+2. The template uses the `{{PACKAGE_TABLE}}` placeholder variable which will be replaced with the generated table of available packages
+3. The next time packages are built or the repository is updated, the new template will be used automatically
+
+This makes it easy to customize the repository's web interface without modifying the Python code.

@@ -3,7 +3,7 @@
 # Copy this file to ssh.toml and modify as needed
 
 # Remote destination in format user@host:path
-user = "root@h.goober.cloud:/var/www/aur"
+user = "baz@h.goober.cloud:/var/www/aur"
 
 # SSH port (optional, defaults to 22)
 port = 2022
