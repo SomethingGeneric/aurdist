@@ -1203,6 +1203,249 @@ def get_packages_from_targets():
     
     return packages
 
+def remove_package_from_targets(package_name):
+    """Remove a package from targets.txt file.
+    
+    Args:
+        package_name: Name of the package to remove
+        
+    Returns:
+        True if package was found and removed, False otherwise
+    """
+    targets_file = Path("targets.txt")
+    if not targets_file.exists():
+        return False
+    
+    # Read all lines
+    with open(targets_file, 'r') as f:
+        lines = f.readlines()
+    
+    # Filter out the package (keep lines that don't match)
+    new_lines = []
+    removed = False
+    for line in lines:
+        stripped = line.strip()
+        # Skip the package line if it matches
+        if stripped and not stripped.startswith('#'):
+            # Check if it's an AUR package name or git URL that contains the package
+            if stripped == package_name:
+                removed = True
+                log_info(f"Removing '{package_name}' from targets.txt")
+                continue
+            elif is_git_url(stripped):
+                # For git URLs, extract package name and compare
+                try:
+                    url_package_name = extract_package_name_from_git_url(stripped)
+                    if url_package_name == package_name:
+                        removed = True
+                        log_info(f"Removing '{stripped}' from targets.txt (package: {package_name})")
+                        continue
+                except ValueError:
+                    pass  # Keep the line if we can't parse it
+        
+        new_lines.append(line)
+    
+    # Write back if we removed something
+    if removed:
+        with open(targets_file, 'w') as f:
+            f.writelines(new_lines)
+    
+    return removed
+
+def remove_package_from_remote(package_name):
+    """Remove a package from remote repository via SSH.
+    
+    Args:
+        package_name: Name of the package to remove from remote
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    where_file = Path(".where")
+    if not where_file.exists():
+        log_debug("No .where file found, skipping remote package removal")
+        return False
+    
+    with open(where_file, 'r') as f:
+        remote_path = f.read().strip()
+    
+    if not remote_path:
+        log_debug("Empty .where file, skipping remote package removal")
+        return False
+    
+    try:
+        # Load SSH configuration
+        ssh_config = load_ssh_config()
+        
+        # Use configured remote destination if available
+        if ssh_config.get('user'):
+            remote_path = ssh_config['user']
+        
+        # Parse the remote destination format: user@host:path
+        if ':' in remote_path:
+            ssh_target, remote_dir = remote_path.rsplit(':', 1)
+        else:
+            ssh_target = remote_path
+            remote_dir = '.'
+        
+        # Build SSH command with configuration
+        ssh_args = build_ssh_command_args(ssh_config)
+        ssh_args_str = ' '.join(ssh_args) if ssh_args else '-o StrictHostKeyChecking=no'
+        
+        log_info(f"Removing package '{package_name}' from remote repository at {remote_path}")
+        
+        # Remove all package files matching the pattern
+        pattern = f"{package_name}-*.pkg.tar.zst*"
+        ssh_command = f"ssh {ssh_args_str} {ssh_target} 'cd {remote_dir} && rm -f {pattern}'"
+        
+        stdout, stderr = run_command(ssh_command, check=False)
+        
+        if stderr:
+            log_debug(f"Warning during remote removal: {stderr}")
+        
+        log_info(f"Successfully removed '{package_name}' from remote repository")
+        
+        # Update the remote repository database
+        ssh_command = f"ssh {ssh_args_str} {ssh_target} 'cd {remote_dir} && repo-add -R aurdist.db.tar.zst {pattern} 2>/dev/null || true'"
+        run_command(ssh_command, check=False)
+        
+        return True
+        
+    except Exception as e:
+        log_debug(f"Error removing package from remote: {e}")
+        return False
+
+def create_github_issue_for_removed_package(package_name, reason="Package no longer found in AUR"):
+    """Create a GitHub issue to notify about a removed package.
+    
+    Args:
+        package_name: Name of the removed package
+        reason: Reason for removal
+        
+    Returns:
+        True if issue was created successfully, False otherwise
+    """
+    try:
+        # Check if we're in a GitHub Actions environment
+        github_token = os.environ.get('GITHUB_TOKEN')
+        github_repo = os.environ.get('GITHUB_REPOSITORY')
+        
+        if not github_token or not github_repo:
+            log_debug("Not running in GitHub Actions or missing credentials, skipping issue creation")
+            return False
+        
+        # Create issue using GitHub API
+        issue_title = f"Security: Package '{package_name}' removed from AUR"
+        issue_body = f"""## Package Removed from Repository
+
+**Package Name:** `{package_name}`  
+**Reason:** {reason}  
+**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}
+
+### What happened?
+
+This package was automatically removed from our AUR repository because it is no longer available in the AUR. This is a security measure to prevent potential malicious re-uploads.
+
+### What should you do?
+
+If you have this package installed on your system:
+1. The package will no longer receive updates from our repository
+2. Consider finding an alternative package or removing it
+3. Check if the package has been renamed or moved to a different repository
+
+### Technical Details
+
+- The package was removed from `targets.txt`
+- All package files were removed from the remote repository
+- The repository database was updated
+
+This is an automated security measure implemented to protect users from potentially malicious package re-uploads.
+"""
+        
+        api_url = f"https://api.github.com/repos/{github_repo}/issues"
+        headers = {
+            'Authorization': f'token {github_token}',
+            'Accept': 'application/vnd.github.v3+json'
+        }
+        data = {
+            'title': issue_title,
+            'body': issue_body,
+            'labels': ['security', 'automated']
+        }
+        
+        response = requests.post(api_url, headers=headers, json=data, timeout=30)
+        
+        if response.status_code == 201:
+            issue_url = response.json().get('html_url', 'unknown')
+            log_info(f"Created GitHub issue for removed package: {issue_url}")
+            return True
+        else:
+            log_debug(f"Failed to create GitHub issue: {response.status_code} - {response.text}")
+            return False
+            
+    except Exception as e:
+        log_debug(f"Error creating GitHub issue: {e}")
+        return False
+
+def handle_missing_aur_packages():
+    """Check for packages in targets.txt that are no longer in AUR and handle them.
+    
+    This function:
+    1. Identifies AUR packages (not git URLs) in targets.txt
+    2. Checks if they still exist in AUR
+    3. For missing packages:
+       - Removes them from the remote repository
+       - Removes them from targets.txt
+       - Creates a GitHub issue to notify users
+       
+    Returns:
+        List of package names that were removed
+    """
+    removed_packages = []
+    target_packages = get_packages_from_targets()
+    
+    if not target_packages:
+        return removed_packages
+    
+    log_debug("\nChecking for missing AUR packages...")
+    
+    for package_name, git_url in target_packages:
+        # Skip git URL packages - they're not from AUR
+        if git_url:
+            log_debug(f"Skipping {package_name} (git URL package)")
+            continue
+        
+        # Check if package exists in AUR
+        log_debug(f"Checking if '{package_name}' exists in AUR...")
+        
+        if not is_package_in_aur(package_name):
+            log_info(f"⚠️  SECURITY: Package '{package_name}' not found in AUR - removing from repository")
+            
+            # Remove from remote repository
+            remove_package_from_remote(package_name)
+            
+            # Remove from targets.txt
+            remove_package_from_targets(package_name)
+            
+            # Create GitHub issue
+            create_github_issue_for_removed_package(package_name)
+            
+            removed_packages.append(package_name)
+        else:
+            log_debug(f"Package '{package_name}' found in AUR - OK")
+    
+    if removed_packages:
+        log_info(f"\n{'='*60}")
+        log_info(f"SECURITY: Removed {len(removed_packages)} missing AUR package(s)")
+        log_info(f"{'='*60}")
+        for pkg in removed_packages:
+            log_info(f"  - {pkg}")
+        log_info(f"{'='*60}")
+    else:
+        log_debug("All AUR packages in targets.txt are still available")
+    
+    return removed_packages
+
 def get_existing_packages():
     """Get list of packages that already exist in packages/ directory."""
     packages_dir = Path("packages")
@@ -1374,7 +1617,10 @@ def main():
             # Check all packages and rebuild outdated ones
             log_debug("Checking all packages for updates...")
             
-            # Get packages from targets.txt or existing packages
+            # SECURITY: Check for missing AUR packages and handle them
+            handle_missing_aur_packages()
+            
+            # Get packages from targets.txt or existing packages (after removing missing ones)
             target_packages = get_packages_from_targets()
             if not target_packages:
                 # get_existing_packages returns simple package names
