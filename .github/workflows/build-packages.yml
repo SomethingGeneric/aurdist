@@ -221,7 +221,7 @@ jobs:
       if: steps.verify_packages.outputs.packages_built == 'true'
       uses: burnett01/rsync-deployments@7.1.0
       with:
-        switches: -avzr --delete
+        switches: -avzr
         path: packages/
         remote_path: /var/www/aur/
         remote_host: h.goober.cloud
