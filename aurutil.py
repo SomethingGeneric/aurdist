@@ -21,6 +21,8 @@ Usage:
     python aurutil.py --no-cleanup                             # Don't clean up packages after building
     python aurutil.py --cleanup-only                           # Only clean up tracked packages and exit
     python aurutil.py --remote-dest user@host:path             # Check versions against remote SSH destination
+    python aurutil.py --cleanup-old-versions                   # Remove old versions, keep only latest of each package
+    python aurutil.py --force-rebuild-all                      # Force rebuild all packages from targets.txt
 """
 
 import subprocess
@@ -36,6 +38,7 @@ import tempfile
 import atexit
 import tomllib
 import time
+import shlex
 from pathlib import Path
 from datetime import datetime
 
@@ -1178,6 +1181,179 @@ def sync_single_package(package_name):
             # Update pacman database to make the package available immediately
             run_command("sudo pacman -Sy", check=False)
 
+def cleanup_old_package_versions_local():
+    """Remove old versions of packages from local packages/ directory, keeping only the latest version of each."""
+    packages_dir = Path("packages")
+    if not packages_dir.exists():
+        log_info("No packages directory found, nothing to clean up")
+        return
+    
+    # Dictionary to store package versions: {package_name: [(version, release, arch, filepath), ...]}
+    package_versions = {}
+    
+    # Scan all package files
+    for pkg_file in packages_dir.glob("*.pkg.tar.zst"):
+        # Extract package info from filename
+        # Pattern: package-name-version-release-arch.pkg.tar.zst
+        # We need to handle package names that contain hyphens
+        match = re.match(r"^(.+?)-([^-]+)-([^-]+)-([^-]+)\.pkg\.tar\.zst$", pkg_file.name)
+        if match:
+            pkg_name = match.group(1)
+            version = match.group(2)
+            release = match.group(3)
+            arch = match.group(4)
+            
+            if pkg_name not in package_versions:
+                package_versions[pkg_name] = []
+            
+            package_versions[pkg_name].append((version, release, arch, pkg_file))
+    
+    # For each package, keep only the latest version
+    removed_count = 0
+    for pkg_name, versions in package_versions.items():
+        if len(versions) <= 1:
+            continue  # Only one version, nothing to remove
+        
+        # Sort by modification time (most recent first)
+        versions.sort(key=lambda x: x[3].stat().st_mtime, reverse=True)
+        
+        # Keep the first (most recent) version, remove the rest
+        latest = versions[0]
+        old_versions = versions[1:]
+        
+        log_info(f"Package '{pkg_name}': keeping latest version {latest[1]}-{latest[2]}, removing {len(old_versions)} old version(s)")
+        
+        for old_version, old_release, old_arch, old_file in old_versions:
+            log_debug(f"  Removing old version: {old_file.name}")
+            try:
+                old_file.unlink()
+                removed_count += 1
+                
+                # Also remove signature file if it exists
+                sig_file = old_file.with_suffix(old_file.suffix + '.sig')
+                if sig_file.exists():
+                    sig_file.unlink()
+                    log_debug(f"  Removed signature: {sig_file.name}")
+            except Exception as e:
+                log_debug(f"  Error removing {old_file.name}: {e}")
+    
+    if removed_count > 0:
+        log_info(f"Removed {removed_count} old package version(s) from local repository")
+    else:
+        log_info("No old package versions found to remove")
+
+def cleanup_old_package_versions_remote():
+    """Remove old versions of packages from remote repository via SSH, keeping only the latest version of each."""
+    where_file = Path(".where")
+    if not where_file.exists():
+        log_info("No .where file found, skipping remote cleanup")
+        return
+    
+    with open(where_file, 'r') as f:
+        remote_path = f.read().strip()
+    
+    if not remote_path:
+        log_info("Empty .where file, skipping remote cleanup")
+        return
+    
+    try:
+        # Load SSH configuration
+        ssh_config = load_ssh_config()
+        
+        # Use configured remote destination if available
+        if ssh_config.get('user'):
+            remote_path = ssh_config['user']
+        
+        # Parse the remote destination format: user@host:path
+        if ':' in remote_path:
+            ssh_target, remote_dir = remote_path.rsplit(':', 1)
+        else:
+            ssh_target = remote_path
+            remote_dir = '.'
+        
+        # Build SSH command with configuration
+        ssh_args = build_ssh_command_args(ssh_config)
+        ssh_args_str = ' '.join(ssh_args) if ssh_args else '-o StrictHostKeyChecking=no'
+        
+        log_info(f"Cleaning up old package versions on remote repository at {remote_path}")
+        
+        # Create a Python script to run remotely that will clean up old versions
+        cleanup_script = '''
+import os
+import re
+from pathlib import Path
+from collections import defaultdict
+
+# Dictionary to store package versions: {package_name: [(version, release, arch, filepath, mtime), ...]}
+package_versions = defaultdict(list)
+
+# Scan all package files
+for pkg_file in Path(".").glob("*.pkg.tar.zst"):
+    # Extract package info from filename
+    match = re.match(r"^(.+?)-([^-]+)-([^-]+)-([^-]+)\\.pkg\\.tar\\.zst$", pkg_file.name)
+    if match:
+        pkg_name = match.group(1)
+        version = match.group(2)
+        release = match.group(3)
+        arch = match.group(4)
+        mtime = pkg_file.stat().st_mtime
+        
+        package_versions[pkg_name].append((version, release, arch, pkg_file, mtime))
+
+# For each package, keep only the latest version
+removed_files = []
+for pkg_name, versions in package_versions.items():
+    if len(versions) <= 1:
+        continue  # Only one version, nothing to remove
+    
+    # Sort by modification time (most recent first)
+    versions.sort(key=lambda x: x[4], reverse=True)
+    
+    # Keep the first (most recent) version, remove the rest
+    old_versions = versions[1:]
+    
+    for old_version, old_release, old_arch, old_file, _ in old_versions:
+        try:
+            old_file.unlink()
+            removed_files.append(old_file.name)
+            
+            # Also remove signature file if it exists
+            sig_file = old_file.with_suffix(old_file.suffix + ".sig")
+            if sig_file.exists():
+                sig_file.unlink()
+        except Exception as e:
+            print(f"Error removing {old_file.name}: {e}", file=sys.stderr)
+
+# Print removed files (one per line) for the calling script to count
+for filename in removed_files:
+    print(filename)
+'''
+        
+        # Execute the cleanup script on the remote server
+        ssh_command = f"ssh {ssh_args_str} {ssh_target} 'cd {remote_dir} && python3 -c {shlex.quote(cleanup_script)}'"
+        
+        stdout, stderr = run_command(ssh_command, check=False)
+        
+        if stdout.strip():
+            removed_files = stdout.strip().split('\n')
+            log_info(f"Removed {len(removed_files)} old package version(s) from remote repository")
+            for filename in removed_files:
+                log_debug(f"  Removed: {filename}")
+        else:
+            log_info("No old package versions found to remove from remote")
+        
+        if stderr:
+            log_debug(f"Remote cleanup warnings: {stderr}")
+        
+        # Update the remote repository database after cleanup
+        log_debug("Updating remote repository database...")
+        ssh_command = f"ssh {ssh_args_str} {ssh_target} 'cd {remote_dir} && repo-add -R aurdist.db.tar.zst *.pkg.tar.zst 2>/dev/null || true'"
+        run_command(ssh_command, check=False)
+        log_debug("Remote repository database updated")
+        
+    except Exception as e:
+        log_info(f"Error during remote cleanup: {e}")
+
 def get_packages_from_targets():
     """Get list of packages from targets.txt file.
     
@@ -1542,6 +1718,8 @@ def main():
     parser.add_argument('--no-cleanup', action='store_true', help='Don\'t clean up packages installed during build process')
     parser.add_argument('--cleanup-only', action='store_true', help='Only clean up tracked packages and exit')
     parser.add_argument('--remote-dest', type=str, help='SSH destination to check for existing packages (user@host:path)')
+    parser.add_argument('--cleanup-old-versions', action='store_true', help='Remove old versions of packages, keeping only the latest version of each')
+    parser.add_argument('--force-rebuild-all', action='store_true', help='Force rebuild all packages from targets.txt regardless of version')
     
     args = parser.parse_args()
     
@@ -1571,6 +1749,14 @@ def main():
     # Handle cleanup-only mode
     if args.cleanup_only:
         manual_cleanup()
+        return
+    
+    # Handle cleanup old versions mode
+    if args.cleanup_old_versions:
+        log_info("Cleaning up old package versions...")
+        cleanup_old_package_versions_local()
+        cleanup_old_package_versions_remote()
+        log_info("Old version cleanup complete")
         return
     
     try:
@@ -1644,7 +1830,7 @@ def main():
                 is_outdated, status, version = check_package_outdated(package_name, args.remote_dest, is_git_package=is_git_package, git_url=git_url, debug=args.debug)
                 log_debug(f"  {status}")
                 
-                if is_outdated or args.force:
+                if is_outdated or args.force or args.force_rebuild_all:
                     packages_to_build.append((package_name, git_url))
                 else:
                     # Track packages that are already up-to-date
