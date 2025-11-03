@@ -1,33 +1,22 @@
-name: Build AUR Packages
+name: Force Rebuild All Packages
 
 on:
-  push:
-    branches: [ main ]
-  #pull_request:
-  #  branches: [ main ]
-  schedule:
-    - cron: '0 2 * * *'
-  workflow_dispatch:  # Allow manual triggering
+  workflow_dispatch:  # Only allow manual triggering
 
-# Sets permissions of the GITHUB_TOKEN:
-# - contents: read - to checkout repository code
-# - pages: write - to deploy to GitHub Pages
-# - id-token: write - for GitHub Pages deployment
-# - issues: write - to create security notifications for removed packages
+# Sets permissions of the GITHUB_TOKEN
 permissions:
   contents: read
   pages: write
   id-token: write
   issues: write
 
-# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
-# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+# Allow only one concurrent deployment
 concurrency:
   group: "pages"
   cancel-in-progress: false
 
 jobs:
-  build-packages:
+  force-rebuild-all:
     runs-on: ubuntu-latest
     container:
       image: docker.io/library/archlinux:latest
@@ -57,7 +46,7 @@ jobs:
         
         # Verify targets.txt exists
         ls -la targets.txt
-        echo "Target packages to build:"
+        echo "Target packages to rebuild:"
         cat targets.txt
     
     - name: Configure pacman for recursive AUR building
@@ -67,7 +56,6 @@ jobs:
         mkdir -p "$WORKSPACE_DIR/packages"
         
         # Add aurdist repository to pacman.conf for recursive building
-        # This allows packages to depend on other packages we've already built
         echo "" >> /etc/pacman.conf
         echo "[aurdist]" >> /etc/pacman.conf
         echo "SigLevel = Never" >> /etc/pacman.conf
@@ -92,7 +80,7 @@ jobs:
         cat "$WORKSPACE_DIR/ssh.toml"
         chown builduser:builduser "$WORKSPACE_DIR/ssh.toml"
         
-        # Create .where file for backward compatibility (if needed)
+        # Create .where file for backward compatibility
         echo "root@h.goober.cloud:/var/www/aur" > "$WORKSPACE_DIR/.where"
         echo "Created .where file for remote syncing:"
         cat "$WORKSPACE_DIR/.where"
@@ -107,22 +95,15 @@ jobs:
         echo "$SSH_KEY" | sudo -u builduser tee /home/builduser/.ssh/id_rsa > /dev/null
         sudo -u builduser chmod 600 /home/builduser/.ssh/id_rsa
         
-        # Add the remote host to known_hosts to avoid host key verification
-        # Port 2022 is configured in ssh.toml
-        # sudo -u builduser ssh-keyscan -p 2022 h.goober.cloud >> /home/builduser/.ssh/known_hosts 2>/dev/null || true
-        # sudo -u builduser chmod 644 /home/builduser/.ssh/known_hosts
-        
       env:
         SSH_KEY: ${{ secrets.SSH_KEY }}
 
-    - name: Build AUR packages
-      id: build_packages
+    - name: Force rebuild all packages
+      id: rebuild_packages
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_REPOSITORY: ${{ github.repository }}
       run: |
-        # Switch to builduser and run the build process with SSH config from ssh.toml
-        # Pass environment variables securely through sudo
         WORKSPACE_DIR=$(pwd)
         pacman -Sy
         
@@ -133,8 +114,8 @@ jobs:
           GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
           bash -c "
             cd '$WORKSPACE_DIR'
-            echo 'Starting AUR package build process using ssh.toml configuration...'
-            python aurutil.py --remote-dest root@h.goober.cloud:/var/www/aur --debug --no-cleanup
+            echo 'Force rebuilding all packages from targets.txt...'
+            python aurutil.py --remote-dest root@h.goober.cloud:/var/www/aur --debug --no-cleanup --force-rebuild-all
           " 2>&1 | tee build_output.log
         EXIT_CODE=${PIPESTATUS[0]}
         set -e
@@ -148,14 +129,14 @@ jobs:
           echo "❌ Build failed - check logs above for details"
         else
           echo "build_status=success" >> $GITHUB_OUTPUT
-          echo "✅ Build completed successfully"
+          echo "✅ Rebuild completed successfully"
         fi
         
         # Exit with the original exit code
         exit $EXIT_CODE
     
     - name: Report AUR connectivity issues
-      if: steps.build_packages.outputs.build_status == 'aur_connectivity_error'
+      if: steps.rebuild_packages.outputs.build_status == 'aur_connectivity_error'
       run: |
         echo "::error::AUR connectivity issues detected. The AUR RPC API could not be reached after multiple retry attempts."
         echo "::error::This may indicate network connectivity issues or AUR service outages."
@@ -185,19 +166,31 @@ jobs:
             echo "packages_built=true" >> $GITHUB_OUTPUT
           else
             echo 'No package files found in packages directory'
-            echo 'This means all tracked packages are up to date - exiting cleanly'
-            echo "packages_built=false" >> $GITHUB_OUTPUT
+            echo 'This should not happen in force rebuild mode - something went wrong'
+            exit 1
           fi
         else
           echo 'Packages directory not found - this is an error'
           exit 1
         fi
     
+    - name: Clean up old package versions locally
+      if: steps.verify_packages.outputs.packages_built == 'true'
+      run: |
+        WORKSPACE_DIR=$(pwd)
+        echo 'Cleaning up old package versions from local packages/ directory...'
+        sudo -u builduser bash -c "
+          cd '$WORKSPACE_DIR'
+          python aurutil.py --cleanup-old-versions
+        "
+        echo 'Local cleanup complete'
+        echo 'Contents of packages directory after cleanup:'
+        ls -la packages/
+    
     - name: Create repository archive
       if: steps.verify_packages.outputs.packages_built == 'true'
       run: |
         # Create a compressed archive of the entire packages directory
-        # This avoids issues with special characters in filenames (like : in repo database files)
         sudo -u builduser bash -c "
           cd /tmp
           tar -czf repo.tar.zst -C '$WORKSPACE_DIR' packages/
@@ -212,7 +205,7 @@ jobs:
       if: steps.verify_packages.outputs.packages_built == 'true'
       uses: actions/upload-artifact@v5
       with:
-        name: aurdist-packages
+        name: aurdist-packages-full-rebuild
         path: repo.tar.zst
         retention-days: 30
         if-no-files-found: error
@@ -238,4 +231,4 @@ jobs:
           cd '$WORKSPACE_DIR'
           python aurutil.py --cleanup-old-versions
         "
-        echo 'Remote cleanup complete - only latest versions of each package remain'
+        echo 'Remote cleanup complete - only latest versions remain on remote server'
