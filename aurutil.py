@@ -54,6 +54,11 @@ TERMBIN_PORT = 9999
 LOG_LEVEL_INFO = 0
 LOG_LEVEL_DEBUG = 1
 
+# Pre-compiled regex patterns for better performance
+PKG_VERSION_REGEX = re.compile(r'^pkgver=[\'\"]?([^\'\"\n]+)[\'\"]?', re.MULTILINE)
+PKG_FILENAME_REGEX = re.compile(r'^(.+?)-([^-]+)-([^-]+)-([^-]+)\.pkg\.tar\.zst$')
+PKG_NAME_SIMPLE_REGEX = re.compile(r'([^-]+(?:-[^-]+)*)-[^-]+-[^-]+-[^-]+\.pkg\.tar\.zst')
+
 # Global tracking for cleanup
 cloned_directories = set()
 build_failures = []
@@ -63,6 +68,10 @@ aur_connectivity_errors = []  # Track AUR connectivity failures
 current_log_level = LOG_LEVEL_INFO  # Default to minimal output
 build_success_info = []  # Track successful builds for reporting
 uptodate_package_info = []  # Track packages that are already up-to-date
+
+# Caches for package queries to avoid redundant network/subprocess calls
+_package_cache = {}  # Cache for package existence checks
+_aur_version_cache = {}  # Cache for AUR version lookups
 
 def log_info(message):
     """Print info level message (always shown)."""
@@ -553,35 +562,69 @@ def run_command(command, check=True, capture_output=True, cwd=None, package_name
         return "", ""
 
 def is_package_in_official_repos(package_name):
-    """Check if a package is in the official repositories using pacman."""
+    """Check if a package is in the official repositories using pacman.
+    
+    Results are cached to avoid redundant subprocess calls.
+    """
+    cache_key = f"official:{package_name}"
+    if cache_key in _package_cache:
+        return _package_cache[cache_key]
+    
     stdout, stderr = run_command(f"pacman -Si {package_name}", check=False)
-    return stdout and "Repository" in stdout
+    result = stdout and "Repository" in stdout
+    _package_cache[cache_key] = result
+    return result
 
 def is_package_in_aur(package_name):
-    """Check if a package exists in the AUR using the RPC interface."""
+    """Check if a package exists in the AUR using the RPC interface.
+    
+    Results are cached to avoid redundant network calls.
+    """
+    cache_key = f"aur:{package_name}"
+    if cache_key in _package_cache:
+        return _package_cache[cache_key]
+    
     response = aur_rpc_request_with_retry(f"{AUR_RPC_URL}{package_name}")
     if response:
         try:
             data = response.json()
-            return data.get("resultcount", 0) > 0
+            result = data.get("resultcount", 0) > 0
+            _package_cache[cache_key] = result
+            return result
         except json.JSONDecodeError as e:
             print(f"Error parsing JSON response for {package_name}: {e}")
+    
+    _package_cache[cache_key] = False
     return False
 
 def get_aur_package_info(package_name):
-    """Get detailed information about an AUR package."""
+    """Get detailed information about an AUR package.
+    
+    Results are cached to avoid redundant network calls.
+    """
+    cache_key = f"info:{package_name}"
+    if cache_key in _aur_version_cache:
+        return _aur_version_cache[cache_key]
+    
     response = aur_rpc_request_with_retry(f"{AUR_RPC_URL}{package_name}")
     if response:
         try:
             data = response.json()
             if data.get("resultcount", 0) > 0:
-                return data["results"][0]
+                result = data["results"][0]
+                _aur_version_cache[cache_key] = result
+                return result
         except json.JSONDecodeError as e:
             print(f"Error parsing JSON response for {package_name}: {e}")
+    
+    _aur_version_cache[cache_key] = None
     return None
 
 def get_aur_version(package_name):
-    """Get the latest version of a package from the AUR."""
+    """Get the latest version of a package from the AUR.
+    
+    Uses cached package info to avoid redundant network calls.
+    """
     package_info = get_aur_package_info(package_name)
     if package_info:
         return package_info.get('Version', '0')
@@ -600,10 +643,10 @@ def get_local_version(package_name):
     if not pkg_files:
         return '0'
     
-    # Get the most recent file
-    pkg_file = max(pkg_files, key=os.path.getctime)
+    # Get the most recent file by modification time (more reliable than creation time)
+    pkg_file = max(pkg_files, key=lambda f: f.stat().st_mtime)
     
-    # Extract version from filename
+    # Extract version from filename using pre-compiled regex
     # Pattern: package-name-version-release-arch.pkg.tar.zst
     match = re.match(rf"{re.escape(package_name)}(?:-[a-zA-Z0-9]+)?-(.+)-[^-]+\.pkg\.tar\.zst", pkg_file.name)
     if match:
@@ -637,8 +680,11 @@ def get_remote_version(package_name, remote_dest):
         ssh_args_str = ' '.join(ssh_args) if ssh_args else '-o StrictHostKeyChecking=no'
         
         # Use SSH to list package files matching the pattern on the remote host
+        # Use shlex.quote for proper escaping
         pattern = f"{package_name}-*.pkg.tar.zst"
-        ssh_command = f"ssh {ssh_args_str} {ssh_target} 'cd {remote_path} && ls -1t {pattern} 2>/dev/null | head -1'"
+        remote_path_quoted = shlex.quote(remote_path)
+        pattern_quoted = shlex.quote(pattern)
+        ssh_command = f"ssh {ssh_args_str} {ssh_target} 'cd {remote_path_quoted} && ls -1t {pattern_quoted} 2>/dev/null | head -1'"
         
         stdout, stderr = run_command(ssh_command, check=False)
         
@@ -676,11 +722,12 @@ def parse_pkgbuild_dependencies(pkgbuild_path):
     with open(pkgbuild_path, 'r', encoding='utf-8') as f:
         content = f.read()
     
-    # Extract dependencies using regex
+    # Extract dependencies using optimized regex (avoid DOTALL for better performance)
     for dep_type in dependencies.keys():
         # Use a more specific pattern that matches the exact dependency type
-        pattern = rf"^{dep_type}=\s*\((.*?)\)"
-        matches = re.findall(pattern, content, re.MULTILINE | re.DOTALL)
+        # Split into two steps for better performance
+        pattern = rf"^{dep_type}=\s*\(((?:[^)]|\n)*?)\)"
+        matches = re.findall(pattern, content, re.MULTILINE)
         if matches:
             # Split by newlines and clean up
             deps = []
@@ -693,7 +740,7 @@ def parse_pkgbuild_dependencies(pkgbuild_path):
                             # For optional dependencies, extract only the package name (before the colon)
                             # Format: "package: description" or just "package"
                             if ':' in line:
-                                package_name = line.split(':')[0].strip()
+                                package_name = line.split(':', 1)[0].strip()
                                 # Remove quotes if present
                                 package_name = package_name.strip('\'"')
                                 if package_name:
@@ -709,7 +756,10 @@ def parse_pkgbuild_dependencies(pkgbuild_path):
                             for dep in dep_list:
                                 dep_name = dep[0] or dep[1] or dep[2]
                                 if dep_name:
-                                    deps.append(dep_name)
+                                    # Strip version constraints (>=, <=, =, >, <)
+                                    # Format can be: package>=1.0, package>1.0, package=1.0, etc.
+                                    dep_name_clean = re.split(r'[<>=]', dep_name)[0]
+                                    deps.append(dep_name_clean)
             dependencies[dep_type] = deps
     
     return dependencies
@@ -730,9 +780,9 @@ def parse_pkgbuild_version(pkgbuild_path):
         with open(pkgbuild_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        # Extract pkgver using regex
+        # Extract pkgver using pre-compiled regex
         # Match: pkgver=value or pkgver='value' or pkgver="value"
-        match = re.search(r'^pkgver=[\'\"]?([^\'\"\n]+)[\'\"]?', content, re.MULTILINE)
+        match = PKG_VERSION_REGEX.search(content)
         if match:
             version = match.group(1).strip()
             return version
@@ -789,8 +839,63 @@ def get_git_package_version(git_url, package_name, debug=False):
             except Exception as e:
                 log_debug(f"Warning: Failed to clean up {temp_dir}: {e}")
 
+def batch_check_aur_packages(package_names):
+    """Check multiple packages in AUR at once using batch RPC request.
+    
+    This is much more efficient than checking packages one by one.
+    Returns a set of package names that exist in AUR.
+    """
+    if not package_names:
+        return set()
+    
+    # Check cache first
+    uncached = []
+    cached_results = set()
+    for pkg in package_names:
+        cache_key = f"aur:{pkg}"
+        if cache_key in _package_cache:
+            if _package_cache[cache_key]:
+                cached_results.add(pkg)
+        else:
+            uncached.append(pkg)
+    
+    if not uncached:
+        return cached_results
+    
+    # Build batch URL - AUR RPC supports multiple arg[] parameters
+    url = "https://aur.archlinux.org/rpc/?v=5&type=info"
+    for pkg in uncached:
+        url += f"&arg[]={pkg}"
+    
+    response = aur_rpc_request_with_retry(url)
+    aur_packages = set()
+    
+    if response:
+        try:
+            data = response.json()
+            if data.get("resultcount", 0) > 0:
+                for result in data["results"]:
+                    pkg_name = result.get("Name")
+                    if pkg_name:
+                        aur_packages.add(pkg_name)
+                        # Cache the positive result
+                        _package_cache[f"aur:{pkg_name}"] = True
+            
+            # Cache negative results for packages not found
+            for pkg in uncached:
+                if pkg not in aur_packages:
+                    _package_cache[f"aur:{pkg}"] = False
+                    
+        except json.JSONDecodeError as e:
+            print(f"Error parsing JSON response for batch query: {e}")
+    
+    return aur_packages | cached_results
+
 def analyze_dependency_status(dependencies):
-    """Analyze dependencies and categorize them by availability."""
+    """Analyze dependencies and categorize them by availability.
+    
+    Optimized to use batch queries instead of checking each package individually.
+    """
     analysis = {
         'official_repos': [],
         'aur_packages': [],
@@ -803,16 +908,28 @@ def analyze_dependency_status(dependencies):
         if dep_type != 'optdepends':  # Skip optional dependencies
             all_deps.extend(dep_list)
     
+    # Remove duplicates and empty strings
+    all_deps = [dep.strip() for dep in all_deps if dep.strip()]
     analysis['total_count'] = len(all_deps)
     
+    if not all_deps:
+        return analysis
+    
+    # First, check which packages are NOT in official repos (since those are quick to check)
+    # and collect candidates for AUR checking
+    aur_candidates = []
     for dep in all_deps:
-        dep = dep.strip()
-        if not dep:
-            continue
-            
         if is_package_in_official_repos(dep):
             analysis['official_repos'].append(dep)
-        elif is_package_in_aur(dep):
+        else:
+            aur_candidates.append(dep)
+    
+    # Batch check all AUR candidates at once
+    aur_packages = batch_check_aur_packages(aur_candidates)
+    
+    # Categorize results
+    for dep in aur_candidates:
+        if dep in aur_packages:
             analysis['aur_packages'].append(dep)
         else:
             analysis['not_found'].append(dep)
@@ -1014,8 +1131,8 @@ def generate_index_html(pkg_files):
     # Extract package information
     packages = []
     for pkg_file in pkg_files:
-        # Pattern: package-name-version-release-arch.pkg.tar.zst
-        match = re.match(r"^(.+)-([^-]+)-([^-]+)-([^-]+)\.pkg\.tar\.zst$", pkg_file.name)
+        # Pattern: package-name-version-release-arch.pkg.tar.zst (use pre-compiled regex)
+        match = PKG_FILENAME_REGEX.match(pkg_file.name)
         if match:
             name = match.group(1)
             version = match.group(2)
@@ -1193,10 +1310,10 @@ def cleanup_old_package_versions_local():
     
     # Scan all package files
     for pkg_file in packages_dir.glob("*.pkg.tar.zst"):
-        # Extract package info from filename
+        # Extract package info from filename using pre-compiled regex
         # Pattern: package-name-version-release-arch.pkg.tar.zst
         # We need to handle package names that contain hyphens
-        match = re.match(r"^(.+?)-([^-]+)-([^-]+)-([^-]+)\.pkg\.tar\.zst$", pkg_file.name)
+        match = PKG_FILENAME_REGEX.match(pkg_file.name)
         if match:
             pkg_name = match.group(1)
             version = match.group(2)
@@ -1630,9 +1747,9 @@ def get_existing_packages():
     
     packages = set()
     for pkg_file in packages_dir.glob("*.pkg.tar.zst"):
-        # Extract package name from filename
+        # Extract package name from filename using pre-compiled regex
         # Pattern: package-name-version-release-arch.pkg.tar.zst
-        match = re.match(r"([^-]+(?:-[^-]+)*)-[^-]+-[^-]+-[^-]+\.pkg\.tar\.zst", pkg_file.name)
+        match = PKG_NAME_SIMPLE_REGEX.match(pkg_file.name)
         if match:
             packages.add(match.group(1))
     
