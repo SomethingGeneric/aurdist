@@ -680,8 +680,11 @@ def get_remote_version(package_name, remote_dest):
         ssh_args_str = ' '.join(ssh_args) if ssh_args else '-o StrictHostKeyChecking=no'
         
         # Use SSH to list package files matching the pattern on the remote host
+        # Use shlex.quote for proper escaping
         pattern = f"{package_name}-*.pkg.tar.zst"
-        ssh_command = f"ssh {ssh_args_str} {ssh_target} 'cd {remote_path} && ls -1t {pattern} 2>/dev/null | head -1'"
+        remote_path_quoted = shlex.quote(remote_path)
+        pattern_quoted = shlex.quote(pattern)
+        ssh_command = f"ssh {ssh_args_str} {ssh_target} 'cd {remote_path_quoted} && ls -1t {pattern_quoted} 2>/dev/null | head -1'"
         
         stdout, stderr = run_command(ssh_command, check=False)
         
@@ -753,7 +756,10 @@ def parse_pkgbuild_dependencies(pkgbuild_path):
                             for dep in dep_list:
                                 dep_name = dep[0] or dep[1] or dep[2]
                                 if dep_name:
-                                    deps.append(dep_name)
+                                    # Strip version constraints (>=, <=, =, >, <)
+                                    # Format can be: package>=1.0, package>1.0, package=1.0, etc.
+                                    dep_name_clean = re.split(r'[<>=]', dep_name)[0]
+                                    deps.append(dep_name_clean)
             dependencies[dep_type] = deps
     
     return dependencies
