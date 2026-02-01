@@ -219,7 +219,7 @@ jobs:
     
     - name: Deploy with rsync
       if: steps.verify_packages.outputs.packages_built == 'true'
-      uses: burnett01/rsync-deployments@7.1.0
+      uses: burnett01/rsync-deployments@8.0.3
       with:
         switches: -avzr
         path: packages/
